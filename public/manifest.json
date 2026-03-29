@@ -1,11 +1,11 @@
 {
   "name": "SolaX Dashboard",
   "short_name": "SolaX",
-  "description": "Tableau de bord de monitoring solaire",
+  "description": "Tableau de bord de monitoring solaire en temps réel",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#0d0d0d",
-  "theme_color": "#0d0d0d",
+  "background_color": "#000000",
+  "theme_color": "#000000",
   "icons": [
     {
       "src": "icon.svg",

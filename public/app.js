@@ -66,10 +66,11 @@ function countSources(data) {
   let live = 0;
   let cached = 0;
   let errors = 0;
+  const now = Date.now();
   for (const d of data) {
     if (d._error) errors++;
-    else if (d._fromCache) cached++;
-    else live++;
+    else if (!d._fromCache || (now - d._cacheTimestamp < 4000)) live++;
+    else cached++;
   }
   return { live, cached, errors };
 }
@@ -78,19 +79,11 @@ function countSources(data) {
 const isLocal =
   location.hostname === "localhost" || location.hostname === "127.0.0.1";
 
-/* ——— Historique graphique : plusieurs jours (localStorage v2) ——— */
-const POWER_CHART_STORAGE = "kerchSolarPowerDay_v1";
-const CHART_SAMPLE_MS = 60 * 1000;
-/** Fenêtre glissante : 7 jours calendaires (aujourd’hui + 6 jours en arrière) */
+/* ——— Historique graphique : plusieurs jours (Serveur) ——— */
 const CHART_RETENTION_DAYS = 7;
-
-const CHART_STORE_V2 = 2;
-
 let powerChart = null;
-let todayHistoryPoints = [];
 let chartViewDayKey = "";
-let lastRecordedDayKey = null;
-let lastPowerSampleTs = 0;
+let serverHistory = { days: {} };
 
 function getLocalDayKey() {
   const d = new Date();
@@ -110,23 +103,8 @@ function addDaysToKey(dayKey, delta) {
   return `${yy}-${mm}-${dd}`;
 }
 
-/** Plus ancien jour conservé / sélectionnable (inclus dans les 7 jours). */
 function getChartOldestDayKey() {
   return addDaysToKey(getLocalDayKey(), -(CHART_RETENTION_DAYS - 1));
-}
-
-function pruneChartStoreDays(store) {
-  if (!store || !store.days) return false;
-  const oldest = getChartOldestDayKey();
-  const today = getLocalDayKey();
-  let removed = false;
-  for (const k of Object.keys(store.days)) {
-    if (k < oldest || k > today) {
-      delete store.days[k];
-      removed = true;
-    }
-  }
-  return removed;
 }
 
 function dayBoundsMs(dayKey) {
@@ -147,82 +125,13 @@ function formatDayLabelFr(dayKey) {
   });
 }
 
-function readChartStore() {
-  try {
-    const raw = localStorage.getItem(POWER_CHART_STORAGE);
-    if (!raw) return { version: CHART_STORE_V2, days: {} };
-    const o = JSON.parse(raw);
-    if (o.version === CHART_STORE_V2 && o.days && typeof o.days === "object") {
-      const store = o;
-      if (pruneChartStoreDays(store)) {
-        try {
-          writeChartStore(store);
-        } catch {
-          /* quota */
-        }
-      }
-      return store;
-    }
-    if (o.day && Array.isArray(o.points)) {
-      const store = { version: CHART_STORE_V2, days: { [o.day]: o.points } };
-      if (pruneChartStoreDays(store)) {
-        try {
-          writeChartStore(store);
-        } catch {
-          /* quota */
-        }
-      }
-      return store;
-    }
-  } catch {
-    /* ignore */
-  }
-  return { version: CHART_STORE_V2, days: {} };
-}
-
-function writeChartStore(store) {
-  pruneChartStoreDays(store);
-  const days = store.days || {};
-  localStorage.setItem(
-    POWER_CHART_STORAGE,
-    JSON.stringify({ version: CHART_STORE_V2, days })
-  );
-}
-
-function getDayPointsFromStore(dayKey) {
-  const store = readChartStore();
-  const raw = store.days[dayKey];
+function getDayPointsFromServer(dayKey) {
+  const raw = serverHistory.days[dayKey];
   if (!Array.isArray(raw)) return [];
-  return raw
-    .filter((p) => Array.isArray(p) && p.length === 2)
-    .map(([t, w]) => ({
-      x: t,
-      y: round2(Math.max(0, w))
-    }));
-}
-
-function setDayPointsInStore(dayKey, points) {
-  try {
-    const store = readChartStore();
-    store.version = CHART_STORE_V2;
-    store.days = store.days || {};
-    store.days[dayKey] = points.map((p) => [p.x, p.y]);
-    writeChartStore(store);
-  } catch {
-    /* quota */
-  }
-}
-
-function handleMidnightRollover() {
-  const today = getLocalDayKey();
-  if (lastRecordedDayKey === null) {
-    lastRecordedDayKey = today;
-    return;
-  }
-  if (lastRecordedDayKey === today) return;
-  todayHistoryPoints = [];
-  lastPowerSampleTs = 0;
-  lastRecordedDayKey = today;
+  return raw.map(([t, w]) => ({
+    x: t,
+    y: round2(Math.max(0, w))
+  }));
 }
 
 function clampChartViewDayToWindow() {
@@ -247,42 +156,15 @@ function updateChartNavUI() {
 function applyChartView() {
   if (!powerChart || !powerChart.data.datasets[0]) return;
   clampChartViewDayToWindow();
-  const today = getLocalDayKey();
-  const pts =
-    chartViewDayKey === today
-      ? todayHistoryPoints.slice()
-      : getDayPointsFromStore(chartViewDayKey);
+
+  const pts = getDayPointsFromServer(chartViewDayKey);
   powerChart.data.datasets[0].data = pts;
+
   const { start, end } = dayBoundsMs(chartViewDayKey);
-  if (chartViewDayKey === today) {
-    powerChart.options.scales.x.min = start;
-    powerChart.options.scales.x.max = undefined;
-  } else {
-    powerChart.options.scales.x.min = start;
-    powerChart.options.scales.x.max = end;
-  }
+  powerChart.options.scales.x.min = start;
+  powerChart.options.scales.x.max = end;
   powerChart.update("none");
   updateChartNavUI();
-}
-
-function recordPowerSample(totalW) {
-  handleMidnightRollover();
-  const today = getLocalDayKey();
-  const w = round2(asNonNegative(totalW));
-  const now = Date.now();
-  if (
-    now - lastPowerSampleTs < CHART_SAMPLE_MS &&
-    todayHistoryPoints.length > 0
-  ) {
-    return;
-  }
-  lastPowerSampleTs = now;
-  todayHistoryPoints.push({ x: now, y: w });
-  setDayPointsInStore(today, todayHistoryPoints);
-  if (chartViewDayKey === today && powerChart && powerChart.data.datasets[0]) {
-    powerChart.data.datasets[0].data = todayHistoryPoints.slice();
-    powerChart.update("none");
-  }
 }
 
 function initPowerChart() {
@@ -291,11 +173,6 @@ function initPowerChart() {
   if (!canvas) return;
 
   const today = getLocalDayKey();
-  lastRecordedDayKey = today;
-  todayHistoryPoints = getDayPointsFromStore(today);
-  if (todayHistoryPoints.length) {
-    lastPowerSampleTs = todayHistoryPoints[todayHistoryPoints.length - 1].x;
-  }
   chartViewDayKey = today;
 
   const tickColor = "#888";
@@ -326,10 +203,22 @@ function initPowerChart() {
         x: {
           type: "time",
           time: {
-            displayFormats: { minute: "HH:mm", hour: "HH:mm" }
+            unit: "hour",
+            displayFormats: {
+              millisecond: "HH:mm",
+              second: "HH:mm",
+              minute: "HH:mm",
+              hour: "HH:mm",
+              day: "HH:mm"
+            }
           },
           grid: { color: gridColor },
-          ticks: { color: tickColor, maxRotation: 0, autoSkip: true }
+          ticks: {
+            color: tickColor,
+            maxRotation: 0,
+            autoSkip: true,
+            maxTicksLimit: 12
+          }
         },
         y: {
           min: 0,
@@ -357,6 +246,13 @@ function initPowerChart() {
           borderColor: "#3d1515",
           borderWidth: 1,
           callbacks: {
+            title(items) {
+              if (!items.length) return "";
+              const date = new Date(items[0].parsed.x);
+              const hh = String(date.getHours()).padStart(2, "0");
+              const mm = String(date.getMinutes()).padStart(2, "0");
+              return `${hh}:${mm}`;
+            },
             label(ctx) {
               const y = ctx.parsed.y;
               return `${ctx.dataset.label}: ${round2(y)} W`;
@@ -404,45 +300,6 @@ function formatAgeFromTs(ts) {
   return Math.floor(sec / 60) + "min " + (sec % 60) + "s";
 }
 
-/* ——— Chargement API /api/pv ——— */
-async function load(options = {}) {
-  const forceRefresh = options.forceRefresh === true;
-  const btnRefresh = document.getElementById("btnRefresh");
-  if (forceRefresh && btnRefresh) {
-    btnRefresh.disabled = true;
-    btnRefresh.setAttribute("aria-busy", "true");
-  }
-
-  const timeEl = document.getElementById("time");
-  timeEl.classList.remove("is-error");
-
-  try {
-    const url = forceRefresh ? "/api/pv?refresh=1" : "/api/pv";
-    const res = await fetch(url);
-    if (!res.ok) throw new Error("HTTP " + res.status);
-    globalData = await res.json();
-
-    if (isLocal) console.log("DATA FRONT:", globalData);
-
-    const totalPower = sum(globalData, "acpower");
-    recordPowerSample(totalPower);
-
-    timeEl.textContent = "🕐 " + new Date().toLocaleString();
-
-    renderDOM();
-
-  } catch (e) {
-    timeEl.textContent = "⚠️ Erreur de chargement — " + new Date().toLocaleString();
-    timeEl.classList.add("is-error");
-    console.error(e);
-  } finally {
-    if (forceRefresh && btnRefresh) {
-      btnRefresh.disabled = false;
-      btnRefresh.removeAttribute("aria-busy");
-    }
-  }
-}
-
 /* ——— Helper : Mise à jour du texte avec Micro-animation ——— */
 function updateVal(id, textHtml, trackingValue) {
   const el = document.getElementById(id);
@@ -458,7 +315,7 @@ function updateVal(id, textHtml, trackingValue) {
 
 let domInitialized = false;
 
-/* ——— Rendu du DOM basé sur globalData ——— */
+/* ——— Rendu complet du DOM (appelé une fois + à chaque nouveau PV data) ——— */
 function renderDOM() {
   if (!globalData || globalData.length === 0) return;
 
@@ -471,8 +328,10 @@ function renderDOM() {
   if (!domInitialized) {
     document.getElementById("summary").innerHTML = `
       <div class="summary-bar">
-        <div class="summary-chip"><span class="summary-chip__label">Live</span><span class="summary-chip__value" id="sum-live"></span></div>
-        <div class="summary-chip cached"><span class="summary-chip__label">Cache</span><span class="summary-chip__value" id="sum-cached"></span></div>
+        <div class="summary-chip cached">
+          <span class="summary-chip__label">Actualisation</span>
+          <span class="summary-chip__value" id="sum-cache-timer"></span>
+        </div>
         ${errors ? `<div class="summary-chip error"><span class="summary-chip__label">Erreur</span><span class="summary-chip__value" id="sum-errors"></span></div>` : '<div id="sum-errors" style="display:none"></div>'}
         <div class="summary-chip"><span class="summary-chip__label">Production total instantanée</span><span class="summary-chip__value" id="sum-power"></span></div>
         <div class="summary-chip"><span class="summary-chip__label">Production du jour</span><span class="summary-chip__value" id="sum-today"></span></div>
@@ -483,7 +342,7 @@ function renderDOM() {
     const rows = globalData.map((r, i) => `
       <tr id="row-${escapeHtml(r._sn)}">
         <td data-label="#">${i + 1}</td>
-        <td data-label="SN" class="sn-cell"><div class="sn-inline"><span class="sn">${escapeHtml(r._sn)}</span><span id="badge-${r._sn}"></span></div></td>
+        <td data-label="SN" class="sn-cell"><span class="sn">${escapeHtml(r._sn)}</span></td>
         <td data-label="Status"><span id="status-${r._sn}"></span></td>
         <td data-label="Prod. instant" class="num"><span id="val-acpower-${r._sn}"></span></td>
         <td data-label="Prod. jour" class="num"><span id="val-yieldtoday-${r._sn}"></span></td>
@@ -504,28 +363,43 @@ function renderDOM() {
     domInitialized = true;
   }
 
-  // 2. Mises à jour ciblées des données (DOM Diffing/Patching manuel)
-  updateVal("sum-live", `<span class="summary-num">${escapeHtml(round2(live))}</span>`, live);
-  updateVal("sum-cached", `<span class="summary-num">${escapeHtml(round2(cached))}</span>`, cached);
+  // 2. Mises à jour ciblées des données
   updateVal("sum-errors", `<span class="summary-num">${escapeHtml(round2(errors))}</span>`, errors);
   updateVal("sum-power", `<span class="summary-num">${escapeHtml(totalPower)}</span><span class="summary-unit">W</span>`, totalPower);
   updateVal("sum-today", `<span class="summary-num">${escapeHtml(totalToday)}</span><span class="summary-unit">kWh</span>`, totalToday);
   updateVal("sum-total", `<span class="summary-num">${escapeHtml(totalTotal)}</span><span class="summary-unit">kWh</span>`, totalTotal);
 
+  // Mise à jour du timer global
+  const maxTs = Math.max(...globalData.filter(d => d._cacheTimestamp).map(d => d._cacheTimestamp));
+  const ageMs = Date.now() - maxTs;
+  const isLive = ageMs < 5000;
+  
+  const timerParent = document.getElementById("sum-cache-timer")?.closest(".summary-chip");
+  if (timerParent) {
+    if (isLive) timerParent.classList.add("is-live");
+    else timerParent.classList.remove("is-live");
+  }
+
+  let labelHtml = "";
+  if (isLive) {
+    labelHtml = `<span class="status-dot pulse"></span><span class="summary-num">Direct</span>`;
+  } else {
+    const ageSec = Math.floor(ageMs / 1000);
+    const min = Math.floor(ageSec / 60);
+    const sec = ageSec % 60;
+    labelHtml = `<span class="summary-num">${min > 0 ? min + "m " : ""}${sec}</span><span class="summary-unit">s</span>`;
+  }
+  updateVal("sum-cache-timer", labelHtml, maxTs);
+
   globalData.forEach(r => {
     if (r._error) {
-       document.getElementById(`status-${r._sn}`).innerHTML = '<span class="badge badge-fault">Erreur</span>';
+       const statusEl = document.getElementById(`status-${r._sn}`);
+       if (statusEl) statusEl.innerHTML = '<span class="badge badge-fault">Erreur</span>';
        return;
     }
 
-    const cacheBadge = r._fromCache
-      ? `<span class="badge badge-cache">cache (${formatAgeFromTs(r._cacheTimestamp)})</span>`
-      : `<span class="badge badge-live">direct</span>`;
-    const ageRaw = r._fromCache ? Math.floor(Date.now() - r._cacheTimestamp) : "live";
-    
-    updateVal(`badge-${r._sn}`, cacheBadge, ageRaw);
     updateVal(`status-${r._sn}`, `<span class="badge ${statusClass(r.inverterStatus)}">${escapeHtml(statusMap[r.inverterStatus] || "-")}</span>`, r.inverterStatus);
-    
+
     updateVal(`val-acpower-${r._sn}`, cellMeasured(r.acpower, FIELD_UNITS.acpower), r.acpower);
     updateVal(`val-yieldtoday-${r._sn}`, cellMeasured(r.yieldtoday, FIELD_UNITS.yieldtoday), r.yieldtoday);
     updateVal(`val-yieldtotal-${r._sn}`, cellMeasured(r.yieldtotal, FIELD_UNITS.yieldtotal), r.yieldtotal);
@@ -534,23 +408,185 @@ function renderDOM() {
   });
 }
 
-/* ——— Au chargement : graphique, bouton manuel, polling API (10s), UI update (1s) ——— */
+/** Mise à jour légère : uniquement le timer global (chaque seconde) */
+function updateTimerBadges() {
+  if (!globalData || globalData.length === 0) return;
+
+  const maxTs = Math.max(...globalData.filter(d => d._cacheTimestamp).map(d => d._cacheTimestamp));
+  const ageMs = Date.now() - maxTs;
+  const isLive = ageMs < 5000;
+
+  const timerEl = document.getElementById("sum-cache-timer");
+  if (timerEl) {
+    const timerParent = timerEl.closest(".summary-chip");
+    if (timerParent) {
+      if (isLive) timerParent.classList.add("is-live");
+      else timerParent.classList.remove("is-live");
+    }
+
+    if (isLive) {
+      timerEl.innerHTML = `<span class="status-dot pulse"></span><span class="summary-num">Direct</span>`;
+    } else {
+      const ageSec = Math.floor(ageMs / 1000);
+      const min = Math.floor(ageSec / 60);
+      const sec = ageSec % 60;
+      timerEl.innerHTML = `<span class="summary-num">${min > 0 ? min + "m " : ""}${sec}</span><span class="summary-unit">s</span>`;
+    }
+  }
+
+  // Mettre à jour l'horloge
+  const timeEl = document.getElementById("time");
+  if (timeEl && !timeEl.classList.contains("is-error")) {
+    timeEl.textContent = "🕐 " + new Date().toLocaleString();
+  }
+}
+
+/* ——— SSE : Connexion temps réel au serveur ——— */
+let eventSource = null;
+let reconnectTimer = null;
+
+function connectSSE() {
+  if (eventSource) {
+    eventSource.close();
+  }
+
+  eventSource = new EventSource("/api/events");
+
+  eventSource.addEventListener("pv", (e) => {
+    try {
+      globalData = JSON.parse(e.data);
+      if (isLocal) console.log("SSE PV:", globalData);
+
+      const timeEl = document.getElementById("time");
+      timeEl.classList.remove("is-error");
+      timeEl.textContent = "🕐 " + new Date().toLocaleString();
+
+      renderDOM();
+    } catch (err) {
+      console.error("Erreur parsing SSE pv:", err);
+    }
+  });
+
+  eventSource.addEventListener("history", (e) => {
+    try {
+      const data = JSON.parse(e.data);
+      if (data && data.days) {
+        serverHistory = data;
+        applyChartView();
+      }
+    } catch (err) {
+      console.error("Erreur parsing SSE history:", err);
+    }
+  });
+
+  eventSource.onerror = () => {
+    console.warn("SSE connexion perdue, reconnexion dans 5s...");
+    eventSource.close();
+    const timeEl = document.getElementById("time");
+    if (timeEl) {
+      timeEl.textContent = "⚠️ Connexion perdue — reconnexion...";
+      timeEl.classList.add("is-error");
+    }
+    // Reconnexion automatique avec backoff
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(connectSSE, 5000);
+  };
+}
+
+/* ——— Bouton Rafraîchir (force un fetch REST ponctuel en parallèle) ——— */
+async function manualRefresh() {
+  const btnRefresh = document.getElementById("btnRefresh");
+  if (btnRefresh) {
+    btnRefresh.disabled = true;
+    btnRefresh.setAttribute("aria-busy", "true");
+  }
+
+  try {
+    const res = await fetch("/api/pv?t=" + Date.now());
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    globalData = await res.json();
+    renderDOM();
+  } catch (e) {
+    console.error("Erreur refresh manuel:", e);
+  } finally {
+    if (btnRefresh) {
+      btnRefresh.disabled = false;
+      btnRefresh.removeAttribute("aria-busy");
+    }
+  }
+}
+
+/* ——— Chargement initial REST (filet de sécurité si SSE met du temps) ——— */
+async function initialLoad() {
+  try {
+    const [pvRes, histRes] = await Promise.all([
+      fetch("/api/pv?t=" + Date.now()),
+      fetch("/api/history?t=" + Date.now())
+    ]);
+
+    if (pvRes.ok) {
+      globalData = await pvRes.json();
+      const timeEl = document.getElementById("time");
+      timeEl.classList.remove("is-error");
+      timeEl.textContent = "🕐 " + new Date().toLocaleString();
+      renderDOM();
+    }
+
+    if (histRes.ok) {
+      const histData = await histRes.json();
+      if (histData && histData.days) {
+        serverHistory = histData;
+        applyChartView();
+      }
+    }
+  } catch (e) {
+    console.error("Erreur chargement initial:", e);
+  }
+}
+
+/* ——— Polling REST de secours (garantit la fraîcheur même si SSE est cassé) ——— */
+async function fallbackPoll() {
+  try {
+    const res = await fetch("/api/pv?t=" + Date.now());
+    if (!res.ok) return;
+    globalData = await res.json();
+    const timeEl = document.getElementById("time");
+    if (timeEl) {
+      timeEl.classList.remove("is-error");
+      timeEl.textContent = "🕐 " + new Date().toLocaleString();
+    }
+    renderDOM();
+  } catch { /* silencieux */ }
+}
+
+async function fallbackHistoryPoll() {
+  try {
+    const res = await fetch("/api/history?t=" + Date.now());
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data && data.days) {
+      serverHistory = data;
+      applyChartView();
+    }
+  } catch { /* silencieux */ }
+}
+
+/* ——— Au chargement ——— */
 document.addEventListener("DOMContentLoaded", () => {
   initPowerChart();
-  document.getElementById("btnRefresh").addEventListener("click", () => {
-    load({ forceRefresh: true }).catch(() => {});
-  });
-  
-  load().catch(() => {});
-  
-  // Polling API toutes les 10 secondes vs chaque seconde
-  setInterval(() => {
-    load().catch(() => {});
-  }, 10000);
 
-  // Mise à jour fluide locale toutes les secondes
-  setInterval(() => {
-    renderDOM();
-  }, 1000);
+  document.getElementById("btnRefresh").addEventListener("click", manualRefresh);
+
+  // 1. Fetch REST immédiat pour afficher les données sans attendre
+  initialLoad();
+
+  // 2. Connecter le flux SSE pour les mises à jour en temps réel
+  connectSSE();
+
+  // 3. Mise à jour légère des timers chaque seconde
+  setInterval(updateTimerBadges, 1000);
+
+  // 4. Polling REST de secours toutes les 10s (filet de sécurité si SSE est bloqué)
+  setInterval(fallbackPoll, 10000);
+  setInterval(fallbackHistoryPoll, 65000);
 });
-
