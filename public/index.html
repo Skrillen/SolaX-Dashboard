@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Parc Solaire des kerch</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<link rel="stylesheet" href="style.css">
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0d0d0d">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.svg">
+</head>
+<body>
+
+<main class="layout-scope">
+<header class="page-header">
+  <span class="page-header__spacer" aria-hidden="true"></span>
+  <h2>🔴 Parc Solaire des kerch — Vue temps réel</h2>
+  <div class="page-header__actions">
+    <button type="button" class="btn-refresh" id="btnRefresh" aria-label="Forcer le rafraîchissement auprès de l’API Solax">Rafraîchir</button>
+  </div>
+</header>
+<div class="subtitle" id="time"></div>
+
+<div id="summary"></div>
+<div id="table"></div>
+
+<section class="chart-section" aria-label="Courbe de production">
+  <div class="chart-toolbar">
+    <button type="button" class="chart-nav-btn" id="chartPrevDay" aria-label="Jour précédent">‹</button>
+    <div class="chart-toolbar-center">
+      <p class="chart-title-main">Production instantanée totale</p>
+      <p class="chart-date-label" id="chartDayLabel"></p>
+    </div>
+    <button type="button" class="chart-nav-btn" id="chartNextDay" aria-label="Jour suivant">›</button>
+  </div>
+  <div class="chart-wrap">
+    <canvas id="chartPower"></canvas>
+  </div>
+</section>
+</main>
+
+<script src="app.js"></script>
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('/sw.js')
+        .then(reg => console.log('ServiceWorker enregistré avec succès :', reg.scope))
+        .catch(err => console.error('Echec enregistrement ServiceWorker :', err));
+    });
+  }
+</script>
+
+</body>
+</html>
