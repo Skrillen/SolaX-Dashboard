@@ -291,6 +291,7 @@ function initPowerChart() {
 
 /* ——— Stockage global des données ——— */
 let globalData = [];
+let isPaused = false;
 
 /* ——— Format du timestamp du cache en temps réel ——— */
 function formatAgeFromTs(ts) {
@@ -376,12 +377,15 @@ function renderDOM() {
   
   const timerParent = document.getElementById("sum-cache-timer")?.closest(".summary-chip");
   if (timerParent) {
-    if (isLive) timerParent.classList.add("is-live");
-    else timerParent.classList.remove("is-live");
+    timerParent.classList.remove("is-live", "is-paused");
+    if (isPaused) timerParent.classList.add("is-paused");
+    else if (isLive) timerParent.classList.add("is-live");
   }
 
   let labelHtml = "";
-  if (isLive) {
+  if (isPaused) {
+    labelHtml = `<span class="status-dot pause"></span><span class="summary-num">Pause</span>`;
+  } else if (isLive) {
     labelHtml = `<span class="status-dot pulse"></span><span class="summary-num">Direct</span>`;
   } else {
     const ageSec = Math.floor(ageMs / 1000);
@@ -420,11 +424,14 @@ function updateTimerBadges() {
   if (timerEl) {
     const timerParent = timerEl.closest(".summary-chip");
     if (timerParent) {
-      if (isLive) timerParent.classList.add("is-live");
-      else timerParent.classList.remove("is-live");
+      timerParent.classList.remove("is-live", "is-paused");
+      if (isPaused) timerParent.classList.add("is-paused");
+      else if (isLive) timerParent.classList.add("is-live");
     }
 
-    if (isLive) {
+    if (isPaused) {
+      timerEl.innerHTML = `<span class="status-dot pause"></span><span class="summary-num">Pause</span>`;
+    } else if (isLive) {
       timerEl.innerHTML = `<span class="status-dot pulse"></span><span class="summary-num">Direct</span>`;
     } else {
       const ageSec = Math.floor(ageMs / 1000);
@@ -454,8 +461,10 @@ function connectSSE() {
 
   eventSource.addEventListener("pv", (e) => {
     try {
-      globalData = JSON.parse(e.data);
-      if (isLocal) console.log("SSE PV:", globalData);
+      const payload = JSON.parse(e.data);
+      globalData = payload.inverters || payload;
+      isPaused = payload._isPaused || false;
+      if (isLocal) console.log("SSE PV:", globalData, "Paused:", isPaused);
 
       const timeEl = document.getElementById("time");
       timeEl.classList.remove("is-error");
@@ -503,7 +512,9 @@ async function initialLoad() {
     ]);
 
     if (pvRes.ok) {
-      globalData = await pvRes.json();
+      const payload = await pvRes.json();
+      globalData = payload.inverters || payload;
+      isPaused = payload._isPaused || false;
       const timeEl = document.getElementById("time");
       timeEl.classList.remove("is-error");
       timeEl.textContent = "🕐 " + new Date().toLocaleString();
@@ -527,7 +538,9 @@ async function fallbackPoll() {
   try {
     const res = await fetch("/api/pv?t=" + Date.now());
     if (!res.ok) return;
-    globalData = await res.json();
+    const payload = await res.json();
+    globalData = payload.inverters || payload;
+    isPaused = payload._isPaused || false;
     const timeEl = document.getElementById("time");
     if (timeEl) {
       timeEl.classList.remove("is-error");

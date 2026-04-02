@@ -135,6 +135,7 @@ body {
 
 .summary-chip.cached .summary-chip__value { color: #fb923c; }
 .summary-chip.cached.is-live .summary-chip__value { color: #22c55e; }
+.summary-chip.cached.is-paused .summary-chip__value { color: #fb923c; }
 .summary-chip.error .summary-chip__value { color: #f87171; }
 .summary-chip.error .summary-chip__value { color: #f87171; }
 
@@ -542,8 +543,17 @@ tbody tr:hover { background: #1f0000; }
 .status-dot.pulse {
   animation: sse-pulse 2s infinite;
 }
+.status-dot.pause {
+  animation: pause-pulse 2s infinite;
+  color: #fb923c;
+}
 @keyframes sse-pulse {
   0% { transform: scale(0.95); opacity: 1; box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.7); }
   70% { transform: scale(1.1); opacity: 0.8; box-shadow: 0 0 0 8px rgba(34, 197, 94, 0); }
   100% { transform: scale(0.95); opacity: 1; box-shadow: 0 0 0 0 rgba(34, 197, 94, 0); }
+}
+@keyframes pause-pulse {
+  0% { transform: scale(0.95); opacity: 1; box-shadow: 0 0 0 0 rgba(251, 146, 60, 0.7); }
+  70% { transform: scale(1.1); opacity: 0.8; box-shadow: 0 0 0 8px rgba(251, 146, 60, 0); }
+  100% { transform: scale(0.95); opacity: 1; box-shadow: 0 0 0 0 rgba(251, 146, 60, 0); }
 }

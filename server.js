@@ -244,7 +244,8 @@ function broadcastSSE(event, data) {
 
 /** Construit le payload PV à partir du cache */
 function buildPvPayload() {
-  return wifiSns.map((sn) => {
+  const isPaused = !isWithinTimeWindow();
+  const list = wifiSns.map((sn) => {
     if (cache[sn]) {
       return {
         ...cache[sn].data,
@@ -259,6 +260,11 @@ function buildPvPayload() {
       _errorMessage: "En attente du 1er background fetch..."
     };
   });
+
+  return {
+    inverters: list,
+    _isPaused: isPaused
+  };
 }
 
 /** Pousse toutes les données aux clients SSE */
