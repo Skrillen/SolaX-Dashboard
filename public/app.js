@@ -493,28 +493,6 @@ function connectSSE() {
   };
 }
 
-/* ——— Bouton Rafraîchir (force un fetch REST ponctuel en parallèle) ——— */
-async function manualRefresh() {
-  const btnRefresh = document.getElementById("btnRefresh");
-  if (btnRefresh) {
-    btnRefresh.disabled = true;
-    btnRefresh.setAttribute("aria-busy", "true");
-  }
-
-  try {
-    const res = await fetch("/api/pv?t=" + Date.now());
-    if (!res.ok) throw new Error("HTTP " + res.status);
-    globalData = await res.json();
-    renderDOM();
-  } catch (e) {
-    console.error("Erreur refresh manuel:", e);
-  } finally {
-    if (btnRefresh) {
-      btnRefresh.disabled = false;
-      btnRefresh.removeAttribute("aria-busy");
-    }
-  }
-}
 
 /* ——— Chargement initial REST (filet de sécurité si SSE met du temps) ——— */
 async function initialLoad() {
@@ -575,7 +553,6 @@ async function fallbackHistoryPoll() {
 document.addEventListener("DOMContentLoaded", () => {
   initPowerChart();
 
-  document.getElementById("btnRefresh").addEventListener("click", manualRefresh);
 
   // 1. Fetch REST immédiat pour afficher les données sans attendre
   initialLoad();

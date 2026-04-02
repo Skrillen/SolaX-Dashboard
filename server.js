@@ -23,6 +23,35 @@ if (!TOKEN) {
   process.exit(1);
 }
 
+/* --------------------------------------------------------------------------
+   Configuration Plage Horaire API (Heure de Paris)
+   03:00 à 23:00 pour éviter d'atteindre la limite journalière (10000 calls).
+   -------------------------------------------------------------------------- */
+const API_START_HOUR = 3;
+const API_START_MINUTE = 0;
+const API_END_HOUR = 23;
+const API_END_MINUTE = 0;
+
+function isWithinTimeWindow() {
+  const now = new Date();
+  // Formatter pour obtenir l'heure précise à Paris, peu importe l'heure du serveur
+  const formatter = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/Paris',
+    hour: 'numeric',
+    minute: 'numeric',
+    hour12: false
+  });
+  const parts = formatter.formatToParts(now);
+  const hour = parseInt(parts.find(p => p.type === 'hour').value, 10);
+  const minute = parseInt(parts.find(p => p.type === 'minute').value, 10);
+  
+  const currentMinutes = hour * 60 + minute;
+  const startMinutes = API_START_HOUR * 60 + API_START_MINUTE;
+  const endMinutes = API_END_HOUR * 60 + API_END_MINUTE;
+  
+  return currentMinutes >= startMinutes && currentMinutes <= endMinutes;
+}
+
 const SOLAX_SNS_ENV = process.env.SOLAX_SNS;
 if (!SOLAX_SNS_ENV) {
   console.error("SOLAX_SNS manquant : définissez-le dans .env ou l'environnement avec une liste d'onduleurs.");
@@ -122,17 +151,23 @@ function pruneHistoryDays() {
   }
 }
 
-function recordHistoryPoint() {
+function recordHistoryPoint(forcedValue = null) {
   let totalPower = 0;
   const now = Date.now();
-  for (const sn of wifiSns) {
-    const entry = cache[sn];
-    if (entry && entry.data && entry.data.acpower) {
-      if (now - entry.timestamp < 5 * 60 * 1000) {
-        totalPower += Math.max(0, parseFloat(entry.data.acpower) || 0);
+
+  if (forcedValue !== null) {
+    totalPower = forcedValue;
+  } else {
+    for (const sn of wifiSns) {
+      const entry = cache[sn];
+      if (entry && entry.data && entry.data.acpower) {
+        if (now - entry.timestamp < 5 * 60 * 1000) {
+          totalPower += Math.max(0, parseFloat(entry.data.acpower) || 0);
+        }
       }
     }
   }
+
   const todayKey = getLocalDayKey();
   if (!history.days[todayKey]) history.days[todayKey] = [];
   history.days[todayKey].push([now, Math.round(totalPower * 100) / 100]);
@@ -174,13 +209,21 @@ async function fetchFromSolax(sn) {
   return false;
 }
 
-/** Exécute un scan complet de tous les onduleurs en parallèle */
+/** Exécute un scan complet de tous les onduleurs en parallèle (si dans la plage horaire) */
 async function fetchAllInverters() {
-  // Lancer tous les fetch en même temps
-  await Promise.all(wifiSns.map(sn => fetchFromSolax(sn)));
-  
-  // Enregistrer le point d'historique
-  recordHistoryPoint();
+  const inWindow = isWithinTimeWindow();
+
+  if (inWindow) {
+    // Lancer tous les fetch en même temps
+    await Promise.all(wifiSns.map(sn => fetchFromSolax(sn)));
+    // Enregistrer le point d'historique réel
+    recordHistoryPoint();
+  } else {
+    // Mode nuit / sleep pour économiser les calls
+    const parisTime = new Date().toLocaleTimeString('fr-FR', { timeZone: 'Europe/Paris' });
+    console.log(`[${parisTime}] 🌙 Hors plage API (${API_START_HOUR}h-${API_END_HOUR}h) : Skip fetch & enregistrement point 0W.`);
+    recordHistoryPoint(0);
+  }
   
   // Push global vers tous les clients
   pushDataToClients();
