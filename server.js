@@ -27,9 +27,9 @@ if (!TOKEN) {
    Configuration Plage Horaire API (Heure de Paris)
    03:00 à 23:00 pour éviter d'atteindre la limite journalière (10000 calls).
    -------------------------------------------------------------------------- */
-const API_START_HOUR = 3;
+const API_START_HOUR = 5;
 const API_START_MINUTE = 0;
-const API_END_HOUR = 23;
+const API_END_HOUR = 22;
 const API_END_MINUTE = 0;
 
 function isWithinTimeWindow() {
