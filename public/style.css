@@ -83,16 +83,9 @@ body {
 }
 
 /* ——— Mode Nuit / Veille (Si 0W produit) ——— */
-body.is-night {
-  --bg-primary: #050505;
-  --bg-secondary: #080808;
-  --border-accent: #333333;
-}
-body.is-night .summary-chip:not(#chip-house-power):not(#chip-grid-power):not(#chip-autarcie):not(#chip-autoconso) {
-  opacity: 0.5;
-}
-body.is-night .chart-section {
-  opacity: 0.7;
+/* ——— Mode Nuit (Masquage des éléments solaires) ——— */
+body.is-night .sun-only {
+  display: none !important;
 }
 
 /* ——— Conteneur : largeur = plein écran, unités cqi pour typo fluide ——— */

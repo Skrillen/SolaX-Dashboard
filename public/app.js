@@ -58,8 +58,9 @@ function countSources(data) {
 /* ——— État global ——— */
 let globalData     = [];
 let globalMeterData = null;
-let isPaused       = false;
-let domInitialized = false;
+let isPaused        = false;
+let sunActive       = true;
+let domInitialized  = false;
 
 /* ——— Graphique historique ——— */
 let powerChart     = null;
@@ -277,10 +278,10 @@ function renderDOM() {
         </div>
         ${errors ? `<div class="summary-chip error"><span class="summary-chip__label">Erreur</span><span class="summary-chip__value" id="sum-errors"></span></div>` : '<div id="sum-errors" style="display:none"></div>'}
         <div class="summary-chip" id="chip-house-power" style="display:none"><span class="summary-chip__label">Conso. Maison</span><span class="summary-chip__value" id="houseConsumption"></span></div>
-        <div class="summary-chip"><span class="summary-chip__label">Prod. instantanée</span><span class="summary-chip__value" id="sum-power"></span></div>
-        <div class="summary-chip" id="chip-grid-power" style="display:none"><span class="summary-chip__label" id="gridFlowLabel">Réseau</span><span class="summary-chip__value" id="gridPower"></span></div>
-        <div class="summary-chip" id="chip-autarcie" style="display:none"><span class="summary-chip__label">Indépendance</span><span class="summary-chip__value" id="val-autarcie"></span></div>
-        <div class="summary-chip" id="chip-autoconso" style="display:none"><span class="summary-chip__label">Auto-conso</span><span class="summary-chip__value" id="val-autoconso"></span></div>
+        <div class="summary-chip sun-only"><span class="summary-chip__label">Prod. instantanée</span><span class="summary-chip__value" id="sum-power"></span></div>
+        <div class="summary-chip sun-only" id="chip-grid-power" style="display:none"><span class="summary-chip__label" id="gridFlowLabel">Réseau</span><span class="summary-chip__value" id="gridPower"></span></div>
+        <div class="summary-chip sun-only" id="chip-autarcie" style="display:none"><span class="summary-chip__label">Indépendance</span><span class="summary-chip__value" id="val-autarcie"></span></div>
+        <div class="summary-chip sun-only" id="chip-autoconso" style="display:none"><span class="summary-chip__label">Auto-conso</span><span class="summary-chip__value" id="val-autoconso"></span></div>
         <div class="summary-chip"><span class="summary-chip__label">Aujourd'hui</span><span class="summary-chip__value" id="sum-today"></span></div>
         <div class="summary-chip forecast"><span class="summary-chip__label">Prévision <span class="weather-icon" id="weather-icon"></span></span><span class="summary-chip__value" id="sum-forecast"></span></div>
         <div class="summary-chip installation"><span class="summary-chip__label">Total Historique</span><span class="summary-chip__value" id="sum-total"></span></div>
@@ -367,7 +368,7 @@ function renderDOM() {
   }
 
   // — Mode Nuit —
-  document.body.classList.toggle("is-night", totalPower === 0);
+  document.body.classList.toggle("is-night", !sunActive);
 
   // — Timer cache —
   const timestamps = globalData.filter(d => d._cacheTimestamp).map(d => d._cacheTimestamp);
@@ -429,7 +430,8 @@ function updateTimerBadges() {
   // Horloge
   const timeEl = document.getElementById("time");
   if (timeEl && !timeEl.classList.contains("is-error")) {
-    timeEl.textContent = "🕐 " + new Date().toLocaleString();
+    const icon = sunActive ? "🕐" : "🌙";
+    timeEl.textContent = `${icon} ${new Date().toLocaleString()}`;
   }
 }
 
@@ -479,6 +481,7 @@ function parsePvPayload(payload) {
   globalData      = payload.inverters || payload;
   globalMeterData = payload.meter || null;
   isPaused        = payload._isPaused || false;
+  sunActive       = payload._sunActive !== undefined ? payload._sunActive : true;
 }
 
 function connectSSE() {

@@ -6,7 +6,7 @@ const express     = require("express");
 const compression = require("compression");
 
 const { isProd, startTime, wifiSns } = require("./lib/config");
-const { loadCacheFromDisk, saveCacheToDiskSync, cache, fetchAllInverters } = require("./lib/solax");
+const { loadCacheFromDisk, saveCacheToDiskSync, cache, fetchAllInverters, isSunActive } = require("./lib/solax");
 const { loadHistoryFromDisk, history }  = require("./lib/history");
 const { loadForecastFromDisk, forecastCache, startWeatherPolling } = require("./lib/weather");
 const { atomicWriteSync } = require("./lib/storage");
@@ -112,11 +112,14 @@ async function startBackgroundPolling() {
   await fetchAllInverters(pushDataToClients);
   console.log(`✅ Fetch initial terminé — ${wifiSns.length} onduleurs`);
 
-  console.log("🔁 Démarrage du Polling (toutes les 60s)...");
   while (true) {
-    await sleep(60_000);
+    const sunUp = isSunActive();
+    const delay = sunUp ? 15_000 : 60_000;
+    
+    await sleep(delay);
+
     const t0 = Date.now();
-    console.log(`[${new Date().toLocaleTimeString()}] Scan ${wifiSns.length} onduleurs...`);
+    console.log(`[${new Date().toLocaleTimeString()}] Scan ${wifiSns.length} onduleurs (Intervalle: ${delay/1000}s)...`);
     await fetchAllInverters(pushDataToClients);
     console.log(`[${new Date().toLocaleTimeString()}] ✅ Scan terminé en ${Date.now() - t0}ms — ${sseClients.size} client(s) SSE`);
   }

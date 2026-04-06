@@ -1,43 +1,48 @@
-# ⚡ SolaX Dashboard
+# ⚡ SolaX Dashboard 
 
-Dashboard temps réel pour le monitoring de votre parc solaire SolaX. Interface premium **Black & Red** avec graphique d'historique avancé, support des compteurs intelligents SolaX (Smart Meter) et flux de données asynchrone ultra-rapide.
+Dashboard temps réel pour le monitoring de votre parc solaire SolaX. Interface premium **Pure Black** avec graphique d'historique avancé, support des compteurs intelligents SolaX (Smart Meter) et flux de données asynchrone ultra-rapide.
 
 ---
 
-## Architecture
+## Architecture Modulaire
 
 ```
 SolaX Dashboard/
-├── server.js              ← Point d'entrée : Express, routes API, démarrage
+├── server.js              ← Point d'entrée : Express, polling dynamique, démarrage
 │
 ├── lib/
-│   ├── config.js          ← Variables d'environnement & chemins de fichiers
-│   ├── storage.js         ← Écritures atomiques (protection contre les crashs)
-│   ├── history.js         ← Historique RAM 7 jours + persistance disque
-│   ├── solax.js           ← OAuth2, fetch API SolaX V2, cache onduleurs
-│   ├── weather.js         ← Prévisions Open-Meteo + polling horaire
-│   └── sse.js             ← Clients SSE, broadcast, construction payload PV
+│   ├── config.js          ← Configuration centralisée (Env, Chemins, Coordonnées)
+│   ├── storage.js         ← Moteur de persistance atomique (protection .tmp + rename)
+│   ├── history.js         ← Gestionnaire d'historique (RAM 7 jours + snapshots)
+│   ├── solax.js           ← Moteur SolaX : OAuth2, Inverters, Meter, SunCalc, Reset minuit
+│   ├── weather.js         ← Prévisions solaires Open-Meteo + polling horaire
+│   └── sse.js             ← Communication temps réel (Push Server-Sent Events)
 │
 └── public/
-    ├── index.html         ← Page web PWA (Design adaptatif mobile/PC)
-    ├── app.js             ← Moteur Frontend (SSE + Rafraîchissement DOM + Chart.js)
-    ├── style.css          ← Thème "Pure Black" & Flexbox fluide
+    ├── index.html         ← Interface PWA adaptative (Mobile/Desktop)
+    ├── app.js             ← Moteur Frontend (SSE, Animations Tweening, Graphiques)
+    ├── style.css          ← Thème "Pure Black" & Design adaptatif
     ├── sw.js              ← Service Worker (Stratégie Offline PWA)
     └── manifest.json      ← Manifest de l'application
 ```
 
 ---
 
-## Fonctionnalités
+## Fonctionnalités Avancées
 
-- 🚀 **OpenAPI V2 + OAuth2** — Authentification automatique par Client Credentials, renouvellement transparent du token.
-- 📡 **Temps réel absolu (SSE)** — Push serveur via Server-Sent Events, sans polling côté client.
-- 🏠 **Moniteur maison intégré** — Consommation exacte calculée en temps réel (Production − Injection/Achat réseau).
-- 📊 **Graphique d'historique** — Visualisation simultanée Production solaire / Consommation maison / Réseau sur 7 jours glissants.
-- 🌤️ **Prévision solaire** — Estimation de production J+1 via Open-Meteo (rayonnement × puissance crête × ratio de performance).
-- 💾 **Persistance fiable** — Toutes les écritures disque sont **atomiques** (fichier `.tmp` + `rename`), aucun JSON corrompu en cas de crash.
-- 🔁 **Polling continu 24h/24** — Appel API toutes les 60 secondes sans fenêtre de restriction horaire.
-- 📱 **PWA** — Installable comme application native sur mobile et desktop, support offline.
+- 🚀 **OAuth2 SolaX V2** — Authentification automatique par Client Credentials, renouvellement transparent, gestion des expirations imprévisibles.
+- 📡 **Temps réel absolu (SSE)** — Flux push serveur via Server-Sent Events pour une réactivité instantanée.
+- ☀️ **Intelligence Solaire (SunCalc)** — Le serveur calcule les heures de lever/coucher du soleil locales pour :
+    - **Polling Dynamique** : Pulse toutes les **15s** le jour et **60s** la nuit.
+    - **Veille Inverters** : Arrêt automatique des requêtes API onduleurs la nuit pour économiser les quotas.
+- 🌙 **Mode Nuit Intelligent** : 
+    - Suppression du "dimming" CSS pour un noir pur et lisible.
+    - Masquage automatique des indicateurs solaires inutiles la nuit.
+    - Icône lunaire **🌙** dans l'horloge.
+- 🕛 **Reset à Minuit** : Remise à zéro automatique de la production du jour (`yieldtoday`) pour attaquer la journée proprement.
+- 🏠 **Moniteur maison intégré** : Consommation exacte calculée en temps réel (Production − Injection/Achat réseau).
+- 💾 **Persistance Robuste** : Toutes les écritures disque sont **atomiques** (fichier `.tmp` + `rename`), protégeant vos données contre toute corruption en cas de crash.
+- 🛡️ **Gestion des Quotas & Erreurs** : Détection des limites API (1M/jour), des codes d'erreurs SolaX (10405, 10402, etc.) et protection anti-spam.
 
 ---
 
@@ -46,31 +51,26 @@ SolaX Dashboard/
 ### 1. Installer les dépendances
 ```bash
 npm install
+npm install suncalc
 ```
 
-### 2. Créer le fichier `.env`
+### 2. Configurer l'environnement (`.env`)
 ```env
 # Authentification SolaX OpenAPI V2 (OAuth2)
 SOLAX_CLIENT_ID=votre_id_client
 SOLAX_CLIENT_SECRET=votre_secret_client
 
-# Numéros de série des équipements
+# Numéros de série
 SOLAX_SNS=SN_onduleur1,SN_onduleur2
-SOLAX_METER_SN=SN_compteur_intelligent   # Optionnel
+SOLAX_METER_SN=SN_compteur_intelligent
 
-# Serveur
-PORT=3000
-NODE_ENV=production
-
-# Localisation (pour les prévisions météo)
+# Localisation (Indispensable pour SunCalc & Météo)
 WEATHER_LAT=48.8566
 WEATHER_LON=2.3522
 
-# Puissance crête de l'installation en watts (pour estimer la production)
+# Puissance crête (Watts) pour estimations
 SOLAR_PEAK_W=9000
 ```
-
-> **Migration depuis l'ancienne API** : Si vous utilisiez `SOLAX_TOKEN`, remplacez-le par une paire `CLIENT_ID` / `CLIENT_SECRET` générée dans les réglages développeurs du portail SolaX Cloud.
 
 ### 3. Démarrer
 ```bash
@@ -88,21 +88,17 @@ npm start
 | `GET  /api/pv` | REST fallback — Snapshot live complet |
 | `GET  /api/history` | REST fallback — Historique des 7 derniers jours |
 | `GET  /api/forecast` | REST fallback — Prévisions de production solaire |
-| `GET  /api/status` | Health check — Statut des onduleurs, uptime, clients SSE |
+| `GET  /api/status` | Health check — Statut, uptime, clients SSE, état onduleurs |
 | `POST /api/mgmt/force-refresh` | Déclenche un rafraîchissement immédiat (cooldown 60s) |
 
 ---
 
-## Données & Persistance
+## Données & Sécurité
 
-Les données sont stockées localement dans `/data/` sous forme JSON :
+Les écritures passent par un **buffer atomique** (`fichier.tmp` → `fichier.json`) garantissant l'intégrité des fichiers JSON même en cas de coupure brutale du serveur.
 
-| Fichier | Contenu | Rétention |
+| Fichier | Contenu | Comportement |
 |---------|---------|-----------|
-| `solax-cache.json` | Dernière mesure connue par onduleur | Permanent (écrasé à chaque fetch) |
-| `solax-history.json` | Courbes de puissance par jour | 7 jours glissants |
-| `forecast-cache.json` | Dernière prévision météo | Mis à jour toutes les heures |
-
-Toutes les écritures passent par un **rename atomique** (`fichier.tmp` → `fichier.json`) pour garantir l'intégrité des données même en cas de coupure brutale.
-
-> Pour une rétention longue durée, ces modules sont conçus pour être encapsulés autour d'une base de données légère (SQLite, InfluxDB, etc.).
+| `solax-cache.json` | Snapshot onduleurs | Mis à jour toutes les 15s le jour / 60s la nuit |
+| `solax-history.json` | Courbes de puissance | Enregistrement chaque minute (Meter 24h/24) |
+| `forecast-cache.json` | Météo | Mis à jour toutes les heures |
