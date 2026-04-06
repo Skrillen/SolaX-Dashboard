@@ -17,8 +17,9 @@
 <link rel="apple-touch-icon" href="icon.svg">
 </head>
 <body>
-
-<main class="layout-scope">
+  <div id="offline-banner" class="offline-banner">🔴 Vous êtes actuellement hors-ligne. Les données affichées sont non actualisées.</div>
+  
+  <main class="layout-scope">
 <header class="page-header">
   <span class="page-header__spacer" aria-hidden="true"></span>
   <h2>🔴 Parc Solaire des kerch — Vue temps réel</h2>
@@ -33,6 +34,7 @@
     <button type="button" class="chart-nav-btn" id="chartPrevDay" aria-label="Jour précédent">‹</button>
     <div class="chart-toolbar-center">
       <p class="chart-title-main">Production instantanée totale</p>
+      <div id="chart-day-stats" class="chart-day-stats"></div>
       <p class="chart-date-label" id="chartDayLabel"></p>
     </div>
     <button type="button" class="chart-nav-btn" id="chartNextDay" aria-label="Jour suivant">›</button>
@@ -41,7 +43,10 @@
     <canvas id="chartPower"></canvas>
   </div>
 </section>
+
 </main>
+
+<div id="toast" class="toast" aria-hidden="true"></div>
 
 <script src="app.js"></script>
 <script>

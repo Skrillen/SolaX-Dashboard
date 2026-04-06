@@ -1,5 +1,6 @@
 .env
 node_modules/
+data/forecast-cache.json
 data/solax-cache.json
 data/solax-history.json
 Web.txt

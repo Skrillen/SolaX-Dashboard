@@ -1,81 +1,87 @@
 # ⚡ SolaX Dashboard
 
-Dashboard temps réel pour monitoring de parc solaire SolaX. Interface premium "Black & Red" avec graphique historique et données en streaming SSE.
+Dashboard temps réel pour le monitoring de votre parc solaire SolaX. Interface premium "Black & Red" avec graphique d'historique avancé, support des compteurs intelligents SolaX (Smart Meter) et flux de données asynchrone ultra-rapide.
+
+![Vue d'ensemble du Dashboard](public/icon.svg)
 
 ## Architecture
 
 ```
 server.js          ← Backend Node.js (Express)
-                     - Polling parallèle (toutes les 60s)
-                     - Fetch multiple SN simultané (Promise.all)
-                     - Low-latency SSE (res.flush)
-                     - Cache RAM + persistance disque
-                     - Historique 7 jours (JSON)
+                     - Polling intelligent (toutes les 60s en journée)
+                     - Requêtes API SolaX V2 couplées (Onduleurs + Réseau/Meter)
+                     - Authentification automatique OAuth2 (Client Credentials)
+                     - Connexion Low-latency via Server-Sent Events (SSE)
+                     - Cache RAM + Sauvegarde asynchrone sur disque
+                     - Historique 7 jours (Puissance Solaire, Conso Maison, Réseau)
 
 public/
-  index.html       ← Page unique (PWA)
-  app.js           ← Frontend (SSE + Chart.js date-fns)
-  style.css        ← Thème Black & Red + Animations
-  sw.js            ← Service Worker (Network First + SSE Bypass)
-  manifest.json    ← PWA manifest
-  icon.svg         ← Icône
-
-data/
-  solax-cache.json   ← Cache instantané (auto-généré)
-  solax-history.json ← Historique courbe (auto-généré)
+  index.html       ← Page web PWA (Design adaptatif mobile/PC)
+  app.js           ← Moteur Frontend (SSE + Rafraîchissement DOM ciblé + Chart.js)
+  style.css        ← Thème "Pure Black" & Flexbox fluide
+  sw.js            ← Service Worker (Stratégie Offline PWA)
+  manifest.json    ← Manifest de l'application
 ```
 
-## Installation
+## Fonctionnalités Clés
 
+- 🚀 **Performance OpenAPI V2** — Synchronisation par lots exclusifs avec l'API OAuth2 de SolaX garantissant une empreinte réseau minimale.
+- 📡 **Temps Réel Absolu (SSE)** — Les données voyagent instantanément du backend vers votre écran sans saccades (évite la surcharge typique des requêtes classiques).
+- 🏠 **Moniteur Domicile Intégré** — Affiche fièrement la consommation exacte de la maison en déduisant intelligemment Injection/Achat et Production.
+- 📊 **Graphique de Comparaison** — Visualisez simultanément votre génération solaire (Rouge) face à l'absorption de votre domicile (Bleu).
+- 🤖 **Predictive Solar** — Interroge une API météorologique et estime votre production des prochaines heures.
+- 🎨 **Smart UI** — Design premium, responsive, avec badges temps-réel animés.
+
+---
+
+## Installation & Configuration
+
+### 1. Cloner et Installer
 ```bash
 npm install
 ```
 
-## Configuration
-
-Créer un fichier `.env` à la racine :
+### 2. Paramétrer l'accès
+Créez un simple fichier `.env` à la racine pour vous relier à SolaX Cloud :
 
 ```env
-SOLAX_TOKEN=votre_token_api
-SOLAX_SNS=SN1,SN2,SN3,...
-PORT=3000                    # optionnel (défaut: 3000)
-NODE_ENV=production          # optionnel (active le cache statique)
+# Authentification SolaX OpenAPI V2
+SOLAX_CLIENT_ID=votre_id_client
+SOLAX_CLIENT_SECRET=votre_secret_client
+
+# Numéros de série (SN)
+SOLAX_SNS=SN_onduleur1,SN_onduleur2
+SOLAX_METER_SN=SN_compteur_intelligent
+
+# Paramètres optionnels (Port, météo, etc)
+PORT=3000
+NODE_ENV=production
+WEATHER_LAT=48.8566
+WEATHER_LON=2.3522
+SOLAR_PEAK_W=9000
 ```
 
-- **`SOLAX_TOKEN`** : Token d'authentification API SolaX Cloud (obtenu sur le portail SolaX)
-- **`SOLAX_SNS`** : Liste des numéros de série WiFi des onduleurs, séparés par des virgules
+> **Attention** : L'authentification a migré vers l'API V2 SolaX (OAuth2). Si vous utilisiez `SOLAX_TOKEN`, vous devez dorénavant générer une paire `CLIENT_ID` / `CLIENT_SECRET` dans les réglages développeurs SolaX.
 
-## Démarrage
-
+### 3. Allumage !
 ```bash
-node server.js
-# ou
 npm start
+# Le dashboard s'ouvrira sur http://localhost:3000
 ```
 
-Le dashboard sera accessible sur `http://localhost:3000`.
+---
 
-## Endpoints API
+## Endpoints API Utilisables
 
-| Route | Description |
+| Route | Rôle |
 |-------|-------------|
-| `GET /api/events` | **SSE** — Flux temps réel (émet `pv` et `history` instantanément après chaque scan) |
-| `GET /api/pv` | REST — Données instantanées de tous les onduleurs (Fallback polling) |
-| `GET /api/history` | REST — Historique de puissance (7 derniers jours) |
-| `GET /api/status` | Health check — Uptime, état des onduleurs, clients SSE connectés |
+| `GET /api/events` | ⚡ **SSE** — Le cœur battant du push de données serveur. |
+| `GET /api/pv` | Secours (REST) — Statut live complet manuel. |
+| `GET /api/history` | Secours (REST) — Graphique global récent. |
+| `GET /api/forecast` | Secours (REST) — Projections météorologiques solaires. |
+| `POST /api/mgmt/force-refresh` | Déclenche une demande manuelle de mise à jour forcée sur tous les équipements SolaX. |
 
-## Fonctionnalités Clés
+## Maintenance & Évolutivité
 
-- 🚀 **Performance Parallèle** — Scan de tous les onduleurs en simultané (`Promise.all`), réduisant le temps de cycle à ~1s.
-- 📡 **SSE Low-Latency** — Streaming des données poussé instantanément au navigateur via `res.flush()`.
-- 📊 **Graphique 24h/7j** — Visualisation historique sur 24h glissantes avec format 24h (HH:mm).
-- 🔄 **Auto-Synchronisation** — Système de polling 60s robuste avec fallback REST automatique toutes les 10s.
-- 🎨 **Interface Premium** — Design "Pure Black & Red", indicateur de synchronisation avec point battant (pulse), animations fluides.
-- 💾 **Persistance** — Sauvegarde automatique du cache et de l'historique sur disque.
-- 📱 **PWA Ready** — Installable sur mobile, stratégie "Network First" pour garantir la fraîcheur des données.
-
-## Stack technique
-
-- **Backend** : Node.js, Express, Axios , Compression
-- **Frontend** : Vanilla JS, Chart.js (Time Adapter), CSS Grid/Flexbox
-- **Communication** : Server-Sent Events (SSE) avec bypass Service Worker
+Ce projet stocke ses données localement dans `/data` sous format `JSON` afin d'être ultra-léger et ne pas dépendre de bases de données (BDD). La taille des fichiers est auto-limitée à une rétention précise.
+Si vous souhaitez conserver les métriques sur plusieurs années, ces modules devront être encapsulés autour d'une technologie telle que SQLite ou InfluxDB.

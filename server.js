@@ -12,24 +12,26 @@ const compression = require("compression");
    -------------------------------------------------------------------------- */
 const CACHE_FILE = path.join(__dirname, "data", "solax-cache.json");
 const HISTORY_FILE = path.join(__dirname, "data", "solax-history.json");
+const FORECAST_FILE = path.join(__dirname, "data", "forecast-cache.json");
 const HISTORY_RETENTION_DAYS = 7;
 
 /* --------------------------------------------------------------------------
    Configuration : token Solax + liste onduleurs
    -------------------------------------------------------------------------- */
-const TOKEN = process.env.SOLAX_TOKEN;
-if (!TOKEN) {
-  console.error("SOLAX_TOKEN manquant : définissez-le dans .env ou l'environnement.");
+const CLIENT_ID = process.env.SOLAX_CLIENT_ID;
+const CLIENT_SECRET = process.env.SOLAX_CLIENT_SECRET;
+if (!CLIENT_ID || !CLIENT_SECRET) {
+  console.error("SOLAX_CLIENT_ID ou SOLAX_CLIENT_SECRET manquant : définissez-les dans .env ou l'environnement.");
   process.exit(1);
 }
 
 /* --------------------------------------------------------------------------
    Configuration Plage Horaire API (Heure de Paris)
-   03:00 à 23:00 pour éviter d'atteindre la limite journalière (10000 calls).
+   05:00 à 22:00 pour éviter d'atteindre la limite journalière (10000 calls).
    -------------------------------------------------------------------------- */
-const API_START_HOUR = 3;
+const API_START_HOUR = 5;
 const API_START_MINUTE = 0;
-const API_END_HOUR = 23;
+const API_END_HOUR = 22;
 const API_END_MINUTE = 0;
 
 function isWithinTimeWindow() {
@@ -44,11 +46,11 @@ function isWithinTimeWindow() {
   const parts = formatter.formatToParts(now);
   const hour = parseInt(parts.find(p => p.type === 'hour').value, 10);
   const minute = parseInt(parts.find(p => p.type === 'minute').value, 10);
-  
+
   const currentMinutes = hour * 60 + minute;
   const startMinutes = API_START_HOUR * 60 + API_START_MINUTE;
   const endMinutes = API_END_HOUR * 60 + API_END_MINUTE;
-  
+
   return currentMinutes >= startMinutes && currentMinutes <= endMinutes;
 }
 
@@ -58,9 +60,78 @@ if (!SOLAX_SNS_ENV) {
   process.exit(1);
 }
 const wifiSns = SOLAX_SNS_ENV.split(",").map((s) => s.trim());
+const METER_SN = process.env.SOLAX_METER_SN || null;
 
 const isProd = process.env.NODE_ENV === "production";
 const startTime = Date.now();
+
+/* --------------------------------------------------------------------------
+   Configuration Météo (Open-Meteo API gratuite)
+   -------------------------------------------------------------------------- */
+const WEATHER_LAT = parseFloat(process.env.WEATHER_LAT) || 48.8566;
+const WEATHER_LON = parseFloat(process.env.WEATHER_LON) || 2.3522;
+
+let forecastCache = {
+  lastUpdate: null,
+  hourly: [],
+  daily: { predictedYield24h: 0, updatedAt: null }
+};
+
+function loadForecastFromDisk() {
+  try {
+    if (!fs.existsSync(FORECAST_FILE)) return;
+    const raw = fs.readFileSync(FORECAST_FILE, "utf8");
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object") {
+      forecastCache = parsed;
+    }
+  } catch { }
+}
+
+function saveForecastToDiskSync() {
+  try {
+    fs.mkdirSync(path.dirname(FORECAST_FILE), { recursive: true });
+    fs.writeFileSync(FORECAST_FILE, JSON.stringify(forecastCache), "utf8");
+  } catch { }
+}
+
+async function fetchWeatherForecast() {
+  const PEAK_W       = parseFloat(process.env.SOLAR_PEAK_W) || 9000;
+  const PERF_RATIO   = 0.85; // Pertes typiques (chaleur, onduleur, câbles)
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${WEATHER_LAT}&longitude=${WEATHER_LON}&hourly=cloud_cover,shortwave_radiation,direct_radiation,diffuse_radiation&daily=sunrise,sunset&timezone=Europe%2FParis&forecast_days=2`;
+
+  try {
+    const { data } = await axios.get(url, { timeout: 10000 });
+    if (!data?.hourly) return false;
+
+    const h = data.hourly;
+    const now = Date.now();
+    const hourlyForecast = h.time.map((t, i) => ({
+      time:              new Date(t).getTime(),
+      cloudCover:        h.cloud_cover[i]          ?? 0,
+      shortwaveRadiation:h.shortwave_radiation[i]  ?? 0,
+      predictedPower:    Math.max(0, Math.round(((h.shortwave_radiation[i] ?? 0) / 1000) * PEAK_W * PERF_RATIO))
+    }));
+
+    const next24h = hourlyForecast.filter(p => p.time >= now && p.time <= now + 86_400_000);
+    const predictedYield24h = Math.round(next24h.reduce((s, p) => s + p.predictedPower / 1000, 0) * 100) / 100;
+
+    forecastCache = { lastUpdate: now, hourly: hourlyForecast, daily: { predictedYield24h, updatedAt: now } };
+    saveForecastToDiskSync();
+    console.log(`[Weather] ✅ Forecast mis à jour — ${next24h.length}h prévues, ~${predictedYield24h} kWh/24h`);
+    broadcastSSE("forecast", forecastCache);
+    return true;
+  } catch (err) {
+    console.error(`[Weather] Erreur fetch:`, err.message);
+    return false;
+  }
+}
+
+function startWeatherPolling() {
+  console.log(`[Weather] Polling météo démarré (${WEATHER_LAT}, ${WEATHER_LON})`);
+  fetchWeatherForecast();
+  setInterval(fetchWeatherForecast, 60 * 60 * 1000);
+}
 
 /* --------------------------------------------------------------------------
    Express
@@ -83,7 +154,7 @@ function loadCacheFromDisk() {
     const raw = fs.readFileSync(CACHE_FILE, "utf8");
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== "object") return;
-    for (const sn of wifiSns) {
+    for (const sn of [...wifiSns, 'meter']) {
       const entry = parsed[sn];
       if (entry && entry.data && entry.timestamp) {
         cache[sn] = entry;
@@ -135,10 +206,7 @@ function scheduleHistorySave() {
 
 function getLocalDayKey() {
   const d = new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
 }
 
 function pruneHistoryDays() {
@@ -152,59 +220,161 @@ function pruneHistoryDays() {
 }
 
 function recordHistoryPoint(forcedValue = null) {
-  let totalPower = 0;
   const now = Date.now();
+  let totalPower = 0;
 
   if (forcedValue !== null) {
     totalPower = forcedValue;
   } else {
     for (const sn of wifiSns) {
       const entry = cache[sn];
-      if (entry && entry.data && entry.data.acpower) {
-        if (now - entry.timestamp < 5 * 60 * 1000) {
-          totalPower += Math.max(0, parseFloat(entry.data.acpower) || 0);
-        }
+      if (entry?.data?.acpower && now - entry.timestamp < 5 * 60_000) {
+        totalPower += Math.max(0, parseFloat(entry.data.acpower) || 0);
       }
     }
   }
 
+  let gridPower = 0;
+  const meterEntry = cache['meter'];
+  if (meterEntry?.data && now - meterEntry.timestamp < 5 * 60_000) {
+    gridPower = meterEntry.data.totalActivePower || 0;
+  }
+  const housePower = Math.max(0, totalPower - gridPower);
+
   const todayKey = getLocalDayKey();
   if (!history.days[todayKey]) history.days[todayKey] = [];
-  history.days[todayKey].push([now, Math.round(totalPower * 100) / 100]);
+  history.days[todayKey].push([
+    now,
+    Math.round(totalPower * 100) / 100,
+    Math.round(housePower * 100) / 100,
+    Math.round(gridPower  * 100) / 100
+  ]);
   pruneHistoryDays();
   scheduleHistorySave();
 }
 
 /* --------------------------------------------------------------------------
-   Fetch API Solax
+   Fetch API Solax - OAuth2
    -------------------------------------------------------------------------- */
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function fetchFromSolax(sn) {
+let currentAccessToken = null;
+let tokenExpiresAt = 0;
+
+async function getValidAccessToken() {
+  const now = Date.now();
+  // Renouveler le token s'il expire dans moins de 5 minutes (300000ms) ou s'il n'existe pas
+  if (currentAccessToken && tokenExpiresAt > now + 300000) {
+    return currentAccessToken;
+  }
+
   try {
-    const response = await axios.post(
-      "https://global.solaxcloud.com/api/v2/dataAccess/realtimeInfo/get",
-      { wifiSn: sn },
+    const authRes = await axios.post(
+      'https://openapi-eu.solaxcloud.com/openapi/auth/oauth/token',
+      'grant_type=client_credentials&client_id=' + CLIENT_ID + '&client_secret=' + CLIENT_SECRET,
       {
-        headers: {
-          tokenId: TOKEN,
-          "Content-Type": "application/json"
-        },
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         timeout: 8000
       }
     );
 
-    if (response.data && response.data.success) {
-      const data = response.data.result;
-      cache[sn] = {
-        data,
-        timestamp: Date.now()
-      };
+    if (authRes.data && authRes.data.result && authRes.data.result.access_token) {
+      currentAccessToken = authRes.data.result.access_token;
+      const expiresIn = authRes.data.result.expires_in || 3600;
+      tokenExpiresAt = now + (expiresIn * 1000);
+      console.log(`[OAuth2] Nouveau token obtenu (expire dans ${expiresIn}s)`);
+      return currentAccessToken;
+    }
+    throw new Error('Format de réponse Auth invalide');
+  } catch (error) {
+    console.error(`[OAuth2] Erreur d'authentification:`, error.message);
+    return null;
+  }
+}
+
+async function fetchFromSolaxBatch() {
+  const token = await getValidAccessToken();
+  if (!token) return false;
+
+  try {
+    const snsList = wifiSns.join(',');
+    const url = `https://openapi-eu.solaxcloud.com/openapi/v2/device/realtime_data?snList=${snsList}&deviceType=1&businessType=1`;
+    
+    const response = await axios.get(url, {
+        headers: { 'Authorization': `Bearer ${token}` },
+        timeout: 10000
+    });
+
+    if (response.data && response.data.code === 10000 && Array.isArray(response.data.result)) {
+      const now = Date.now();
+      for (const item of response.data.result) {
+        const sn = item.deviceSn;
+        // Mapping API V2 (openapi) vers l'ancienne structure Legacy
+        // Basé sur la documentation officielle :
+        const mappedData = {
+          acpower: item.acPower1 !== null ? item.acPower1 : 0, // AC power 1 (Puissance onduleur)
+          yieldtoday: item.dailyYield || 0,                    // Daily PV yield
+          yieldtotal: item.totalYield || 0,                    // Total PV yield
+          inverterStatus: item.deviceStatus,                   // Device status
+          uploadTime: item.dataTime,                           // Data reporting time
+          feedinpower: item.gridPower !== null ? item.gridPower : 0 // Meter 1 grid port power
+        };
+
+        if (wifiSns.includes(sn)) {
+          cache[sn] = {
+            data: mappedData,
+            timestamp: now
+          };
+        }
+      }
+      scheduleSaveCache();
+      return true;
+    } else if (response.data && response.data.code === 10014) {
+      // 10014: invalid token, force refresh
+      tokenExpiresAt = 0;
+    } else {
+      console.error(`[API] Réponse inattendue:`, response.data);
+    }
+  } catch (error) {
+    console.error(`[API] Erreur fetch Batch API Solax:`, error.message);
+    if (error.response && error.response.status === 401) {
+       tokenExpiresAt = 0; // force refresh si 401
+    }
+  }
+  return false;
+}
+
+async function fetchMeterBatch() {
+  if (!METER_SN) return false;
+  const token = await getValidAccessToken();
+  if (!token) return false;
+
+  try {
+    const url = `https://openapi-eu.solaxcloud.com/openapi/v2/device/realtime_data?snList=${METER_SN}&deviceType=3&businessType=1`;
+    const response = await axios.get(url, {
+        headers: { 'Authorization': `Bearer ${token}` },
+        timeout: 10000
+    });
+
+    if (response.data && response.data.code === 10000 && Array.isArray(response.data.result)) {
+      const now = Date.now();
+      for (const item of response.data.result) {
+        if (item.deviceSn === METER_SN) {
+          cache['meter'] = {
+            data: {
+              importEnergy: item.importEnergy || 0,
+              exportEnergy: item.exportEnergy || 0,
+              totalActivePower: item.totalActivePower || 0
+            },
+            timestamp: now
+          };
+        }
+      }
       scheduleSaveCache();
       return true;
     }
   } catch (error) {
-    console.error(`Erreur fetch API Solax (${sn}):`, error.message);
+    console.error(`[API] Erreur fetch Batch API Meter:`, error.message);
   }
   return false;
 }
@@ -214,8 +384,8 @@ async function fetchAllInverters() {
   const inWindow = isWithinTimeWindow();
 
   if (inWindow) {
-    // Lancer tous les fetch en même temps
-    await Promise.all(wifiSns.map(sn => fetchFromSolax(sn)));
+    // Appels pour Inverters et Meter
+    await Promise.all([fetchFromSolaxBatch(), fetchMeterBatch()]);
     // Enregistrer le point d'historique réel
     recordHistoryPoint();
   } else {
@@ -224,7 +394,7 @@ async function fetchAllInverters() {
     console.log(`[${parisTime}] 🌙 Hors plage API (${API_START_HOUR}h-${API_END_HOUR}h) : Skip fetch & enregistrement point 0W.`);
     recordHistoryPoint(0);
   }
-  
+
   // Push global vers tous les clients
   pushDataToClients();
 }
@@ -263,6 +433,7 @@ function buildPvPayload() {
 
   return {
     inverters: list,
+    meter: cache['meter'] ? cache['meter'].data : null,
     _isPaused: isPaused
   };
 }
@@ -327,6 +498,30 @@ app.get("/api/history", (req, res) => {
   res.json(history);
 });
 
+let lastForceRefresh = 0;
+const REFRESH_COOLDOWN = 60000;
+
+app.post("/api/mgmt/force-refresh", async (req, res) => {
+  const now = Date.now();
+  if (now - lastForceRefresh < REFRESH_COOLDOWN) {
+    const remains = Math.ceil((REFRESH_COOLDOWN - (now - lastForceRefresh)) / 1000);
+    return res.status(429).json({ error: `Cooldown actif. Réessayez dans ${remains}s.` });
+  }
+
+  console.log("🛠️ Force Refresh demandé via secret gesture...");
+  lastForceRefresh = now;
+
+  // Exécuter le fetch immédiatement
+  fetchAllInverters().catch(() => { });
+
+  res.json({ ok: true, message: "Rafraîchissement forcé lancé." });
+});
+
+app.get("/api/forecast", (req, res) => {
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate, private");
+  res.json(forecastCache);
+});
+
 // Health check
 app.get("/api/status", (req, res) => {
   const now = Date.now();
@@ -354,7 +549,9 @@ app.get("/api/status", (req, res) => {
    -------------------------------------------------------------------------- */
 loadCacheFromDisk();
 loadHistoryFromDisk();
+loadForecastFromDisk();
 startBackgroundPolling();
+startWeatherPolling();
 
 const PORT = Number(process.env.PORT) || 3000;
 app.listen(PORT, () => {
