@@ -379,21 +379,12 @@ async function fetchMeterBatch() {
   return false;
 }
 
-/** Exécute un scan complet de tous les onduleurs en parallèle (si dans la plage horaire) */
+/** Exécute un scan complet de tous les onduleurs en parallèle (24h/24, sans restriction horaire) */
 async function fetchAllInverters() {
-  const inWindow = isWithinTimeWindow();
-
-  if (inWindow) {
-    // Appels pour Inverters et Meter
-    await Promise.all([fetchFromSolaxBatch(), fetchMeterBatch()]);
-    // Enregistrer le point d'historique réel
-    recordHistoryPoint();
-  } else {
-    // Mode nuit / sleep pour économiser les calls
-    const parisTime = new Date().toLocaleTimeString('fr-FR', { timeZone: 'Europe/Paris' });
-    console.log(`[${parisTime}] 🌙 Hors plage API (${API_START_HOUR}h-${API_END_HOUR}h) : Skip fetch & enregistrement point 0W.`);
-    recordHistoryPoint(0);
-  }
+  // Appels pour Inverters et Meter — aucune restriction horaire
+  await Promise.all([fetchFromSolaxBatch(), fetchMeterBatch()]);
+  // Enregistrer le point d'historique réel
+  recordHistoryPoint();
 
   // Push global vers tous les clients
   pushDataToClients();
@@ -414,7 +405,7 @@ function broadcastSSE(event, data) {
 
 /** Construit le payload PV à partir du cache */
 function buildPvPayload() {
-  const isPaused = !isWithinTimeWindow();
+  const isPaused = false; // Polling 24h/24 — jamais en pause
   const list = wifiSns.map((sn) => {
     if (cache[sn]) {
       return {
