@@ -495,11 +495,12 @@ tbody tr:hover { background: #1f0000; }
 }
 
 .chart-day-stats {
-  margin: 6px 0;
+  margin: 8px 0;
   display: flex;
+  flex-wrap: wrap;
   justify-content: center;
-  gap: 16px;
-  font-size: 0.95rem;
+  gap: clamp(8px, 1.5vw, 24px);
+  font-size: clamp(0.85rem, 0.75rem + 0.8cqi, 1rem);
   font-weight: 600;
 }
 

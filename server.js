@@ -19,6 +19,24 @@ const {
 } = require("./lib/sse");
 
 /* --------------------------------------------------------------------------
+   Capture des Logs en mémoire
+   -------------------------------------------------------------------------- */
+const logBuffer = [];
+const originalLog = console.log;
+const originalWarn = console.warn;
+const originalError = console.error;
+
+function addToBuffer(type, args) {
+  const msg = `[${new Date().toLocaleTimeString()}] [${type}] ${args.map(a => (typeof a === 'object' ? JSON.stringify(a) : a)).join(" ")}`;
+  logBuffer.push(msg);
+  if (logBuffer.length > 100) logBuffer.shift();
+}
+
+console.log = (...args) => { originalLog(...args); addToBuffer("INFO", args); };
+console.warn = (...args) => { originalWarn(...args); addToBuffer("WARN", args); };
+console.error = (...args) => { originalError(...args); addToBuffer("ERROR", args); };
+
+/* --------------------------------------------------------------------------
    Express
    -------------------------------------------------------------------------- */
 const app = express();
@@ -64,19 +82,15 @@ app.get("/api/forecast", (req, res) => {
   res.json(forecastCache);
 });
 
-// Force-refresh avec cooldown anti-spam
-let lastForceRefresh  = 0;
-const REFRESH_COOLDOWN = 60_000;
+// Logs serveur
+app.get("/api/logs", (req, res) => {
+  res.set("Content-Type", "text/plain; charset=utf-8");
+  res.send(logBuffer.join("\n"));
+});
 
 app.post("/api/mgmt/force-refresh", async (req, res) => {
-  const now = Date.now();
-  if (now - lastForceRefresh < REFRESH_COOLDOWN) {
-    const remains = Math.ceil((REFRESH_COOLDOWN - (now - lastForceRefresh)) / 1000);
-    return res.status(429).json({ error: `Cooldown actif. Réessayez dans ${remains}s.` });
-  }
-  console.log("🛠️ Force Refresh demandé via secret gesture...");
-  lastForceRefresh = now;
-  fetchAllInverters(pushDataToClients).catch(() => {});
+  console.log("🛠️ Force Refresh demandé...");
+  fetchAllInverters(pushDataToClients, true).catch(() => {});
   res.json({ ok: true, message: "Rafraîchissement forcé lancé." });
 });
 

@@ -145,18 +145,40 @@ function updateChartStats() {
   const statsEl = document.getElementById("chart-day-stats");
   if (!statsEl) return;
   const pts = getDayPointsFromServer(chartViewDayKey);
-  let totalYield = 0, peakPower = 0;
+  
+  let totalYield = 0, peakPower = 0, totalHouse = 0, totalSolarUsed = 0;
+  
   if (pts.length > 0) {
+    // Trier les points par sécurité pour l'intégration temporelle
+    pts.sort((a, b) => a.x - b.x);
     peakPower = Math.max(...pts.map(p => p.y));
+
     for (let i = 1; i < pts.length; i++) {
-      totalYield += ((pts[i].y + pts[i-1].y) / 2) * ((pts[i].x - pts[i-1].x) / 3_600_000);
+      const dt = (pts[i].x - pts[i-1].x) / 3_600_000; // Delta T en heures
+
+      // Sécurité : si l'écart est > 30 min, on ignore le segment (évite les calculs aberrants)
+      if (dt > 0 && dt < 0.5) {
+        const avgProd  = (pts[i].y + pts[i-1].y) / 2;
+        const avgHouse = (pts[i].house != null && pts[i-1].house != null) ? (pts[i].house + pts[i-1].house) / 2 : 0;
+        
+        totalYield += avgProd * dt;
+        totalHouse += avgHouse * dt;
+        // Solaire utilisé = ce qui est produit et consommé simultanément
+        totalSolarUsed += Math.min(avgProd, avgHouse) * dt;
+      }
     }
   }
+
   const { v: kY, u: uY } = formatVal(totalYield, "kWh");
   const { v: kP, u: uP } = formatVal(peakPower, "W");
+  const autoConso = totalYield > 0 ? Math.round((totalSolarUsed / totalYield) * 100) : 0;
+  const autarcie  = totalHouse > 0 ? Math.round((totalSolarUsed / totalHouse) * 100) : 0;
+
   statsEl.innerHTML = `
     <div class="chart-stat-item"><span class="chart-stat-label">Rendement</span><span class="chart-stat-value">${kY} ${uY}</span></div>
-    <div class="chart-stat-item"><span class="chart-stat-label">Pic</span><span class="chart-stat-value">${kP} ${uP}</span></div>`;
+    <div class="chart-stat-item"><span class="chart-stat-label">Pic</span><span class="chart-stat-value">${kP} ${uP}</span></div>
+    <div class="chart-stat-item"><span class="chart-stat-label">Indépendance</span><span class="chart-stat-value">${autarcie} %</span></div>
+    <div class="chart-stat-item"><span class="chart-stat-label">Auto-conso</span><span class="chart-stat-value">${autoConso} %</span></div>`;
 }
 
 function initPowerChart() {
@@ -280,8 +302,8 @@ function renderDOM() {
         <div class="summary-chip" id="chip-house-power" style="display:none"><span class="summary-chip__label">Conso. Maison</span><span class="summary-chip__value" id="houseConsumption"></span></div>
         <div class="summary-chip sun-only"><span class="summary-chip__label">Prod. instantanée</span><span class="summary-chip__value" id="sum-power"></span></div>
         <div class="summary-chip sun-only" id="chip-grid-power" style="display:none"><span class="summary-chip__label" id="gridFlowLabel">Réseau</span><span class="summary-chip__value" id="gridPower"></span></div>
-        <div class="summary-chip sun-only" id="chip-autarcie" style="display:none"><span class="summary-chip__label">Indépendance</span><span class="summary-chip__value" id="val-autarcie"></span></div>
-        <div class="summary-chip sun-only" id="chip-autoconso" style="display:none"><span class="summary-chip__label">Auto-conso</span><span class="summary-chip__value" id="val-autoconso"></span></div>
+        <div class="summary-chip" id="chip-autarcie" style="display:none"><span class="summary-chip__label">Indépendance</span><span class="summary-chip__value" id="val-autarcie"></span></div>
+        <div class="summary-chip" id="chip-autoconso" style="display:none"><span class="summary-chip__label">Auto-conso</span><span class="summary-chip__value" id="val-autoconso"></span></div>
         <div class="summary-chip"><span class="summary-chip__label">Aujourd'hui</span><span class="summary-chip__value" id="sum-today"></span></div>
         <div class="summary-chip forecast"><span class="summary-chip__label">Prévision <span class="weather-icon" id="weather-icon"></span></span><span class="summary-chip__value" id="sum-forecast"></span></div>
         <div class="summary-chip installation"><span class="summary-chip__label">Total Historique</span><span class="summary-chip__value" id="sum-total"></span></div>
@@ -352,18 +374,21 @@ function renderDOM() {
     const labelStr = gridPower > 0 ? "Export Réseau" : gridPower < 0 ? "Import Réseau" : "Réseau équilibré";
     if (elLabel && elLabel.innerText !== labelStr) elLabel.innerText = labelStr;
 
-    // KPI Autoconsommation : % de la prod. PV consommée localement
-    const autoConso = totalPower > 0 ? Math.round(Math.max(0, totalPower - Math.max(0, gridPower)) / totalPower * 100) : 0;
+    // KPI Autoconsommation (JOUR) : (Prod - Export) / Prod
+    const dailyExport = globalMeterData.dailyExport || 0;
+    const dailyImport = globalMeterData.dailyImport || 0;
+    const pvUsedDaily = Math.max(0, totalToday - dailyExport);
+    
+    const autoConso = totalToday > 0 
+      ? Math.round((pvUsedDaily / totalToday) * 100) 
+      : 0;
     updateVal("val-autoconso", `<span class="summary-num" style="color:var(--accent-success)">${autoConso} %</span>`, autoConso);
 
-    // KPI Autarcie : % de la conso. maison couverte par le solaire
-    let autarcie = 0;
-    if (housePower > 0) {
-      const pvUsed = Math.max(0, housePower - Math.abs(Math.min(0, gridPower)));
-      autarcie = Math.round(pvUsed / housePower * 100);
-    } else if (totalPower > 0) {
-      autarcie = 100;
-    }
+    // KPI Autarcie (JOUR) : Solaire utilisé / Conso Maison Totale
+    const houseConsoDaily = pvUsedDaily + dailyImport;
+    const autarcie = houseConsoDaily > 0 
+      ? Math.round((pvUsedDaily / houseConsoDaily) * 100) 
+      : 0;
     updateVal("val-autarcie", `<span class="summary-num" style="color:var(--accent-success)">${autarcie} %</span>`, autarcie);
   }
 
@@ -383,10 +408,12 @@ function renderDOM() {
   }
   const timerHtml = isPaused
     ? `<span class="status-dot pause"></span><span class="summary-num">Pause</span>`
+    : !sunActive
+    ? `<span class="summary-num">😴</span>`
     : isLive
     ? `<span class="status-dot pulse"></span><span class="summary-num">Direct</span>`
     : (() => { const s = Math.floor(ageMs / 1000); const m = Math.floor(s / 60); return `<span class="summary-num">${m > 0 ? m + "m " : ""}${s % 60}</span><span class="summary-unit">s</span>`; })();
-  updateVal("sum-cache-timer", timerHtml, maxTs);
+  updateVal("sum-cache-timer", timerHtml, sunActive ? maxTs : "night");
 
   // — Tableau onduleurs —
   globalData.forEach(r => {
@@ -423,6 +450,8 @@ function updateTimerBadges() {
   }
   timerEl.innerHTML = isPaused
     ? `<span class="status-dot pause"></span><span class="summary-num">Pause</span>`
+    : !sunActive
+    ? `<span class="summary-num" title="Onduleurs en veille">😴</span>`
     : isLive
     ? `<span class="status-dot pulse"></span><span class="summary-num">Direct</span>`
     : (() => { const s = Math.floor(ageMs / 1000); const m = Math.floor(s / 60); return `<span class="summary-num">${m > 0 ? m + "m " : ""}${s % 60}</span><span class="summary-unit">s</span>`; })();
@@ -482,6 +511,11 @@ function parsePvPayload(payload) {
   globalMeterData = payload.meter || null;
   isPaused        = payload._isPaused || false;
   sunActive       = payload._sunActive !== undefined ? payload._sunActive : true;
+  if (payload.forecast && payload.forecast.daily?.predictedYield24h > 0) {
+    if (isLocal) console.log("SSE Forecast Update:", payload.forecast.daily.predictedYield24h);
+    forecastData = payload.forecast;
+    applyChartView(); 
+  }
 }
 
 function connectSSE() {
@@ -509,7 +543,11 @@ function connectSSE() {
   eventSource.addEventListener("forecast", (e) => {
     try {
       const data = JSON.parse(e.data);
-      if (data?.hourly || data?.daily) { forecastData = data; applyChartView(); renderDOM(); }
+      if ((data?.hourly || data?.daily) && data.daily?.predictedYield24h > 0) {
+        forecastData = data;
+        applyChartView();
+        renderDOM();
+      }
     } catch (err) { console.error("SSE forecast parse error:", err); }
   });
 
@@ -539,7 +577,7 @@ async function initialLoad() {
       renderDOM();
     }
     if (histRes.ok) { const d = await histRes.json(); if (d?.days) { serverHistory = d; applyChartView(); } }
-    if (fcRes.ok)   { const d = await fcRes.json();   if (d?.hourly || d?.daily) { forecastData = d; applyChartView(); renderDOM(); } }
+    if (fcRes.ok)   { const d = await fcRes.json();   if ((d?.hourly || d?.daily) && d.daily?.predictedYield24h > 0) { forecastData = d; applyChartView(); renderDOM(); } }
   } catch (e) { console.error("Erreur chargement initial:", e); }
 }
 
