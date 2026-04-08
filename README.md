@@ -39,8 +39,14 @@ SolaX Dashboard/
     - Suppression du "dimming" CSS pour un noir pur et lisible.
     - Masquage automatique des indicateurs solaires inutiles la nuit.
     - Icône lunaire **🌙** dans l'horloge.
-- 🕛 **Reset à Minuit** : Remise à zéro automatique de la production du jour (`yieldtoday`) pour attaquer la journée proprement.
+- 🕛 **Reset à Minuit & Bilans (Daily Summaries)** : 
+    - Remise à zéro automatique de la production du jour (`yieldtoday`).
+    - Enregistrement d'un **bilan définitif** à minuit dans l'historique pour garantir une cohérence parfaite des jours passés.
 - 🏠 **Moniteur maison intégré** : Consommation exacte calculée en temps réel (Production − Injection/Achat réseau).
+- 📊 **KPIs Énergétiques Précis** : 
+    - Calcul de l'**Indépendance** et de l'**Auto-consommation** basé sur les cumuls réels (kWh) de la journée.
+    - Info-bulles interactives au survol pour voir le détail des calculs (Solaire utilisé / Conso totale).
+- 🌅 **Éphéméride Solaire** : Affichage dynamique des heures de lever et coucher du soleil (sans marge) à côté de l'horloge.
 - 💾 **Persistance Robuste** : Toutes les écritures disque sont **atomiques** (fichier `.tmp` + `rename`), protégeant vos données contre toute corruption en cas de crash.
 - 🛡️ **Gestion des Quotas & Erreurs** : Détection des limites API (1M/jour), des codes d'erreurs SolaX (10405, 10402, etc.) et protection anti-spam.
 
@@ -51,7 +57,6 @@ SolaX Dashboard/
 ### 1. Installer les dépendances
 ```bash
 npm install
-npm install suncalc
 ```
 
 ### 2. Configurer l'environnement (`.env`)
@@ -65,40 +70,32 @@ SOLAX_SNS=SN_onduleur1,SN_onduleur2
 SOLAX_METER_SN=SN_compteur_intelligent
 
 # Localisation (Indispensable pour SunCalc & Météo)
-WEATHER_LAT=48.8566
-WEATHER_LON=2.3522
+WEATHER_LAT=48.0996
+WEATHER_LON=7.3040
 
 # Puissance crête (Watts) pour estimations
 SOLAR_PEAK_W=9000
 ```
 
-### 3. Démarrer
-```bash
-npm start
-# Dashboard disponible sur http://localhost:3000
-```
-
 ---
 
-## Endpoints API
+## Endpoints API & Logs
 
 | Route | Rôle |
 |-------|------|
-| `GET  /api/events` | ⚡ **SSE** — Flux push temps réel (PV, historique, météo) |
-| `GET  /api/pv` | REST fallback — Snapshot live complet |
-| `GET  /api/history` | REST fallback — Historique des 7 derniers jours |
-| `GET  /api/forecast` | REST fallback — Prévisions de production solaire |
+| `GET  /api/events` | ⚡ **SSE** — Flux push temps réel (PV, historique, météo, soleil) |
+| `GET  /api/logs` | 📜 Interface de logs serveur en direct |
 | `GET  /api/status` | Health check — Statut, uptime, clients SSE, état onduleurs |
-| `POST /api/mgmt/force-refresh` | Déclenche un rafraîchissement immédiat (cooldown 60s) |
+| `POST /api/mgmt/force-refresh` | Déclenche un rafraîchissement immédiat (sans cooldown) |
 
 ---
 
 ## Données & Sécurité
 
-Les écritures passent par un **buffer atomique** (`fichier.tmp` → `fichier.json`) garantissant l'intégrité des fichiers JSON même en cas de coupure brutale du serveur.
+Les écritures passent par un **buffer atomique** garantissant l'intégrité des fichiers JSON même en cas de coupure brutale.
 
 | Fichier | Contenu | Comportement |
 |---------|---------|-----------|
 | `solax-cache.json` | Snapshot onduleurs | Mis à jour toutes les 15s le jour / 60s la nuit |
-| `solax-history.json` | Courbes de puissance | Enregistrement chaque minute (Meter 24h/24) |
-| `forecast-cache.json` | Météo | Mis à jour toutes les heures |
+| `solax-history.json` | Courbes & Résumés | Points chaque minute + Bilan final à minuit |
+| `forecast-cache.json` | Météo | Prévisions recalées sur le fuseau local |

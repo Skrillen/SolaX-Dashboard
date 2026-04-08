@@ -163,6 +163,13 @@ body.is-night .sun-only {
 }
 .subtitle.is-error { color: var(--accent-danger); }
 
+.solar-times {
+  color: var(--text-secondary);
+  font-weight: 600;
+  margin-left: 8px;
+  opacity: 0.9;
+}
+
 /* ——— Cartes résumé (Live, totaux, etc.) ——— */
 .summary-bar {
   display: flex;

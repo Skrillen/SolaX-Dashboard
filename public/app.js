@@ -58,6 +58,7 @@ function countSources(data) {
 /* ——— État global ——— */
 let globalData     = [];
 let globalMeterData = null;
+let globalSolarData = null;
 let isPaused        = false;
 let sunActive       = true;
 let domInitialized  = false;
@@ -70,8 +71,12 @@ let forecastData   = { hourly: [], daily: { predictedYield24h: 0 } };
 
 /* ——— Helpers date / graphique ——— */
 function getLocalDayKey() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Paris",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
 }
 function addDaysToKey(dayKey, delta) {
   const [y, m, d] = dayKey.split("-").map(Number);
@@ -108,23 +113,27 @@ function updateChartNavUI() {
 
 function applyChartView() {
   if (!powerChart || !powerChart.data.datasets[2]) return;
-  const oldest = getChartOldestDayKey(), today = getLocalDayKey();
-  if (chartViewDayKey < oldest) chartViewDayKey = oldest;
-  if (chartViewDayKey > today)  chartViewDayKey = today;
-
-  const isToday   = chartViewDayKey === today;
-  const pts       = getDayPointsFromServer(chartViewDayKey);
+  const today = getLocalDayKey();
+  const { start: viewStart, end: viewEnd } = dayBoundsMs(chartViewDayKey);
+  const pts = getDayPointsFromServer(chartViewDayKey);
 
   powerChart.data.datasets[2].data = pts.map(p => ({ x: p.x, y: p.y }));
   if (powerChart.data.datasets[3]) {
     powerChart.data.datasets[3].data = pts.filter(p => p.house != null).map(p => ({ x: p.x, y: p.house }));
   }
 
-  if (isToday) {
-    const yPts = getDayPointsFromServer(addDaysToKey(today, -1));
-    powerChart.data.datasets[0].data   = yPts.map(p => ({ x: p.x, y: p.y }));
+  // Courbe de comparaison et prédiction
+  if (chartViewDayKey === today) {
+    // 1. Hier (on décale les points de +24h pour les superposer sur aujourd'hui)
+    const yesterdayKey = addDaysToKey(today, -1);
+    const yPts         = getDayPointsFromServer(yesterdayKey);
+    powerChart.data.datasets[0].data   = yPts.map(p => ({ x: p.x + 86_400_000, y: p.y }));
     powerChart.data.datasets[0].hidden = false;
-    powerChart.data.datasets[1].data   = forecastData.hourly.filter(h => h.time > Date.now()).map(h => ({ x: h.time, y: h.predictedPower }));
+
+    // 2. Prédiction (toute la journée)
+    powerChart.data.datasets[1].data = forecastData.hourly
+      .filter(h => h.time >= viewStart && h.time <= viewEnd)
+      .map(h => ({ x: h.time, y: h.predictedPower }));
     powerChart.data.datasets[1].hidden = false;
   } else {
     powerChart.data.datasets[0].data   = [];
@@ -133,10 +142,9 @@ function applyChartView() {
     powerChart.data.datasets[1].hidden = true;
   }
 
-  const { start, end } = dayBoundsMs(chartViewDayKey);
-  powerChart.options.scales.x.min = start;
-  powerChart.options.scales.x.max = end;
-  powerChart.update();
+  powerChart.options.scales.x.min = viewStart;
+  powerChart.options.scales.x.max = viewEnd;
+  powerChart.update("none"); // Update sans animation pour plus de fluidité
   updateChartNavUI();
   updateChartStats();
 }
@@ -144,28 +152,40 @@ function applyChartView() {
 function updateChartStats() {
   const statsEl = document.getElementById("chart-day-stats");
   if (!statsEl) return;
-  const pts = getDayPointsFromServer(chartViewDayKey);
-  
+  const isToday = chartViewDayKey === getLocalDayKey();
+  const summary = serverHistory.summaries ? serverHistory.summaries[chartViewDayKey] : null;
+
   let totalYield = 0, peakPower = 0, totalHouse = 0, totalSolarUsed = 0;
-  
-  if (pts.length > 0) {
-    // Trier les points par sécurité pour l'intégration temporelle
-    pts.sort((a, b) => a.x - b.x);
-    peakPower = Math.max(...pts.map(p => p.y));
 
-    for (let i = 1; i < pts.length; i++) {
-      const dt = (pts[i].x - pts[i-1].x) / 3_600_000; // Delta T en heures
-
-      // Sécurité : si l'écart est > 30 min, on ignore le segment (évite les calculs aberrants)
-      if (dt > 0 && dt < 0.5) {
-        const avgProd  = (pts[i].y + pts[i-1].y) / 2;
-        const avgHouse = (pts[i].house != null && pts[i-1].house != null) ? (pts[i].house + pts[i-1].house) / 2 : 0;
-        
-        totalYield += avgProd * dt;
-        totalHouse += avgHouse * dt;
-        // Solaire utilisé = ce qui est produit et consommé simultanément
-        totalSolarUsed += Math.min(avgProd, avgHouse) * dt;
+  // Priorité au résumé définitif (pour les jours passés)
+  if (!isToday && summary) {
+    totalYield     = summary.yield;
+    totalHouse     = (summary.yield - summary.export) + summary.import;
+    totalSolarUsed = summary.yield - summary.export;
+    // On doit quand même trouver le Pic dans les points
+    const pts = getDayPointsFromServer(chartViewDayKey);
+    if (pts.length > 0) peakPower = Math.max(...pts.map(p => p.y));
+  } 
+  else {
+    // Calcul en temps réel (pour aujourd'hui ou si pas de résumé)
+    const pts = getDayPointsFromServer(chartViewDayKey);
+    if (pts.length > 0) {
+      pts.sort((a, b) => a.x - b.x);
+      peakPower = Math.max(...pts.map(p => p.y));
+      for (let i = 1; i < pts.length; i++) {
+        const dt = (pts[i].x - pts[i-1].x) / 3_600_000;
+        if (dt > 0 && dt < 0.5) {
+          const avgProd  = (pts[i].y + pts[i-1].y) / 2;
+          const avgHouse = (pts[i].house != null && pts[i-1].house != null) ? (pts[i].house + pts[i-1].house) / 2 : 0;
+          totalYield     += avgProd * dt;
+          totalHouse     += avgHouse * dt;
+          totalSolarUsed += Math.min(avgProd, avgHouse) * dt;
+        }
       }
+      // Conversion Wh -> kWh pour le calcul en temps réel
+      totalYield /= 1000;
+      totalHouse /= 1000;
+      totalSolarUsed /= 1000;
     }
   }
 
@@ -177,8 +197,8 @@ function updateChartStats() {
   statsEl.innerHTML = `
     <div class="chart-stat-item"><span class="chart-stat-label">Rendement</span><span class="chart-stat-value">${kY} ${uY}</span></div>
     <div class="chart-stat-item"><span class="chart-stat-label">Pic</span><span class="chart-stat-value">${kP} ${uP}</span></div>
-    <div class="chart-stat-item"><span class="chart-stat-label">Indépendance</span><span class="chart-stat-value">${autarcie} %</span></div>
-    <div class="chart-stat-item"><span class="chart-stat-label">Auto-conso</span><span class="chart-stat-value">${autoConso} %</span></div>`;
+    <div class="chart-stat-item" title="Solaire utilisé : ${round2(totalSolarUsed)} kWh\nConsommation totale : ${round2(totalHouse)} kWh"><span class="chart-stat-label">Indépendance</span><span class="chart-stat-value">${autarcie} %</span></div>
+    <div class="chart-stat-item" title="Solaire utilisé : ${round2(totalSolarUsed)} kWh\nProduction totale : ${round2(totalYield)} kWh"><span class="chart-stat-label">Auto-conso</span><span class="chart-stat-value">${autoConso} %</span></div>`;
 }
 
 function initPowerChart() {
@@ -389,7 +409,14 @@ function renderDOM() {
     const autarcie = houseConsoDaily > 0 
       ? Math.round((pvUsedDaily / houseConsoDaily) * 100) 
       : 0;
+    
+    const autarcieEl = document.getElementById("chip-autarcie");
+    if (autarcieEl) autarcieEl.title = `Solaire utilisé : ${round2(pvUsedDaily)} kWh\nConsommation maison : ${round2(houseConsoDaily)} kWh`;
     updateVal("val-autarcie", `<span class="summary-num" style="color:var(--accent-success)">${autarcie} %</span>`, autarcie);
+
+    const autoConsoEl = document.getElementById("chip-autoconso");
+    if (autoConsoEl) autoConsoEl.title = `Solaire utilisé : ${round2(pvUsedDaily)} kWh\nProduction totale : ${round2(totalToday)} kWh`;
+
   }
 
   // — Mode Nuit —
@@ -460,20 +487,20 @@ function updateTimerBadges() {
   const timeEl = document.getElementById("time");
   if (timeEl && !timeEl.classList.contains("is-error")) {
     const icon = sunActive ? "🕐" : "🌙";
-    timeEl.textContent = `${icon} ${new Date().toLocaleString()}`;
-  }
-}
+    const timeStr = `${icon} ${new Date().toLocaleString()}`;
+    
+    let solarHtml = "";
+    if (globalSolarData && globalSolarData.sunrise) {
+      const sunrise = new Date(globalSolarData.sunrise).toLocaleTimeString("fr-FR", { hour: '2-digit', minute: '2-digit' });
+      const sunset  = new Date(globalSolarData.sunset).toLocaleTimeString("fr-FR", { hour: '2-digit', minute: '2-digit' });
+      solarHtml = `<span class="solar-times"> • 🌅 ${sunrise} | 🌇 ${sunset}</span>`;
+    }
 
-/* ——— Icône météo animée ——— */
-function updateWeatherIcon() {
-  const iconEl = document.getElementById("weather-icon");
-  if (!iconEl || !forecastData.hourly?.length) return;
-  const avgCloud = forecastData.hourly.slice(0, 12).reduce((a, h) => a + h.cloudCover, 0) / 12;
-  const icon = avgCloud < 20 ? '<span class="icon-sun">☀️</span>'
-             : avgCloud < 55 ? '<span class="icon-cloud">⛅</span>'
-             : avgCloud < 85 ? '<span class="icon-cloud">☁️</span>'
-                             : '<span class="icon-cloud">🌧️</span>';
-  if (iconEl.innerHTML !== icon) iconEl.innerHTML = icon;
+    const newHtml = `${timeStr}${solarHtml}`;
+    if (timeEl.innerHTML !== newHtml) {
+      timeEl.innerHTML = newHtml;
+    }
+  }
 }
 
 /* ——— Force-refresh serveur ——— */
@@ -511,6 +538,7 @@ function parsePvPayload(payload) {
   globalMeterData = payload.meter || null;
   isPaused        = payload._isPaused || false;
   sunActive       = payload._sunActive !== undefined ? payload._sunActive : true;
+  globalSolarData = payload._solar || null;
   if (payload.forecast && payload.forecast.daily?.predictedYield24h > 0) {
     if (isLocal) console.log("SSE Forecast Update:", payload.forecast.daily.predictedYield24h);
     forecastData = payload.forecast;
@@ -528,7 +556,7 @@ function connectSSE() {
       sseAlive = true;
       if (isLocal) console.log("SSE PV:", globalData);
       const timeEl = document.getElementById("time");
-      if (timeEl) { timeEl.classList.remove("is-error"); timeEl.textContent = "🕐 " + new Date().toLocaleString(); }
+      if (timeEl) { timeEl.classList.remove("is-error"); }
       renderDOM();
     } catch (err) { console.error("SSE pv parse error:", err); }
   });
@@ -573,7 +601,7 @@ async function initialLoad() {
     if (pvRes.ok) {
       parsePvPayload(await pvRes.json());
       const timeEl = document.getElementById("time");
-      if (timeEl) { timeEl.classList.remove("is-error"); timeEl.textContent = "🕐 " + new Date().toLocaleString(); }
+      if (timeEl) { timeEl.classList.remove("is-error"); }
       renderDOM();
     }
     if (histRes.ok) { const d = await histRes.json(); if (d?.days) { serverHistory = d; applyChartView(); } }
@@ -589,7 +617,7 @@ async function fallbackPoll() {
     if (!res.ok) return;
     parsePvPayload(await res.json());
     const timeEl = document.getElementById("time");
-    if (timeEl) { timeEl.classList.remove("is-error"); timeEl.textContent = "🕐 " + new Date().toLocaleString(); }
+    if (timeEl) { timeEl.classList.remove("is-error"); }
     renderDOM();
   } catch { /* silencieux */ }
 }
