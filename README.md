@@ -12,8 +12,9 @@ SolaX Dashboard/
 │
 ├── lib/
 │   ├── config.js          ← Configuration centralisée (Env, Chemins, Coordonnées)
-│   ├── storage.js         ← Moteur de persistance atomique (protection .tmp + rename)
-│   ├── history.js         ← Gestionnaire d'historique (RAM 7 jours + snapshots)
+│   ├── database.js        ← Moteur de base de données SQLite (Mode WAL)
+│   ├── storage.js         ← Moteur de persistance atomique (pour les caches JSON)
+│   ├── history.js         ← Gestionnaire d'historique (RAM 7 jours + synchro SQLite)
 │   ├── solax.js           ← Moteur SolaX : OAuth2, Inverters, Meter, SunCalc, Reset minuit
 │   ├── weather.js         ← Prévisions solaires Open-Meteo + polling horaire
 │   └── sse.js             ← Communication temps réel (Push Server-Sent Events)
@@ -47,8 +48,26 @@ SolaX Dashboard/
     - Calcul de l'**Indépendance** et de l'**Auto-consommation** basé sur les cumuls réels (kWh) de la journée.
     - Info-bulles interactives au survol pour voir le détail des calculs (Solaire utilisé / Conso totale).
 - 🌅 **Éphéméride Solaire** : Affichage dynamique des heures de lever et coucher du soleil (sans marge) à côté de l'horloge.
-- 💾 **Persistance Robuste** : Toutes les écritures disque sont **atomiques** (fichier `.tmp` + `rename`), protégeant vos données contre toute corruption en cas de crash.
+- 💾 **Base de Données SQLite** : Historisation **sans limite de temps** et très performante pour les données brutes et les bilans, avec un cache mémoire sur 7 jours pour un affichage instantané.
 - 🛡️ **Gestion des Quotas & Erreurs** : Détection des limites API (1M/jour), des codes d'erreurs SolaX (10405, 10402, etc.) et protection anti-spam.
+
+---
+
+## Outils d'Administration (CLI)
+
+Des scripts utilitaires sont inclus pour faciliter la maintenance de la base de données :
+
+- **Importer de vieilles archives JSON :**
+  ```bash
+  npm run import-history -- data/old-history.json
+  # Ou pour un dossier complet : node tools/import-history.js data/backups/
+  ```
+
+- **Réparer / Recalculer les bilans journaliers :**
+  ```bash
+  node tools/fix-summaries.js
+  ```
+  Ce script scanne la base SQLite, intègre les courbes de puissance minute par minute, et recalcule les bilans (utile en cas de panne ou de données corrompues le soir).
 
 ---
 
@@ -96,6 +115,6 @@ Les écritures passent par un **buffer atomique** garantissant l'intégrité des
 
 | Fichier | Contenu | Comportement |
 |---------|---------|-----------|
+| `solax.db` | Base de données SQLite | Stockage illimité de l'historique (points + bilans) |
 | `solax-cache.json` | Snapshot onduleurs | Mis à jour toutes les 15s le jour / 60s la nuit |
-| `solax-history.json` | Courbes & Résumés | Points chaque minute + Bilan final à minuit |
 | `forecast-cache.json` | Météo | Prévisions recalées sur le fuseau local |

@@ -3,4 +3,7 @@ node_modules/
 data/forecast-cache.json
 data/solax-cache.json
 data/solax-history.json
+data/solax.db
+data/solax.db-shm
+data/solax.db-wal
 Web.txt

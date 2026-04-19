@@ -528,13 +528,39 @@ tbody tr:hover { background: #1f0000; }
   color: var(--text-primary);
 }
 
-.chart-date-label {
-  margin: 4px 0 0;
-  font-size: clamp(0.8rem, 0.7rem + 0.9cqi, 0.95rem);
+.chart-date-picker {
+  margin: 4px auto 0;
+  display: block;
+  font-family: inherit;
+  font-size: clamp(0.85rem, 0.75rem + 0.9cqi, 1rem);
   font-weight: 500;
   color: var(--text-secondary);
-  text-transform: capitalize;
-  line-height: 1.25;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 2px 6px;
+  cursor: pointer;
+  text-align: center;
+  transition: all 0.2s ease;
+  color-scheme: dark light;
+}
+
+.chart-date-picker:hover, .chart-date-picker:focus {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--border-color);
+  color: var(--text-primary);
+  outline: none;
+}
+
+/* Masquer la petite flèche native sur Webkit pour ne garder que l'icône calendrier */
+.chart-date-picker::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  opacity: 0.6;
+  transition: opacity 0.2s ease;
+}
+
+.chart-date-picker:hover::-webkit-calendar-picker-indicator {
+  opacity: 1;
 }
 
 .chart-wrap {

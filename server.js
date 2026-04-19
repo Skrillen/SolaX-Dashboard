@@ -9,8 +9,7 @@ const { isProd, startTime, wifiSns } = require("./lib/config");
 const { loadCacheFromDisk, saveCacheToDiskSync, cache, fetchAllInverters, isSunActive } = require("./lib/solax");
 const { loadHistoryFromDisk, history }  = require("./lib/history");
 const { loadForecastFromDisk, forecastCache, startWeatherPolling } = require("./lib/weather");
-const { atomicWriteSync } = require("./lib/storage");
-const { HISTORY_FILE }    = require("./lib/config");
+const db                  = require("./lib/database");
 const {
   sseClients,
   broadcastSSE,
@@ -94,6 +93,47 @@ app.post("/api/mgmt/force-refresh", async (req, res) => {
   res.json({ ok: true, message: "Rafraîchissement forcé lancé." });
 });
 
+/* --------------------------------------------------------------------------
+   Endpoints base de données SQLite
+   -------------------------------------------------------------------------- */
+
+/**
+ * GET /api/db/readings?day=YYYY-MM-DD
+ * Retourne tous les points de puissance d'un jour donné.
+ */
+app.get("/api/db/readings", (req, res) => {
+  const { day } = req.query;
+  if (!day || !/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+    return res.status(400).json({ error: "Paramètre 'day' requis au format YYYY-MM-DD" });
+  }
+  res.set("Cache-Control", "no-store");
+  res.json(db.getPowerReadings(day));
+});
+
+/**
+ * GET /api/db/summaries?limit=30
+ * Retourne les N derniers bilans journaliers (plus récent en premier).
+ */
+app.get("/api/db/summaries", (req, res) => {
+  const limit = Math.min(Math.max(parseInt(req.query.limit) || 30, 1), 365);
+  res.set("Cache-Control", "no-store");
+  res.json(db.getDailySummaries(limit));
+});
+
+/**
+ * GET /api/db/range?from=<ts_ms>&to=<ts_ms>
+ * Retourne les points de puissance entre deux timestamps Unix ms.
+ */
+app.get("/api/db/range", (req, res) => {
+  const from = parseInt(req.query.from);
+  const to   = parseInt(req.query.to);
+  if (!from || !to || isNaN(from) || isNaN(to) || from >= to) {
+    return res.status(400).json({ error: "Paramètres 'from' et 'to' requis (timestamps Unix ms, from < to)" });
+  }
+  res.set("Cache-Control", "no-store");
+  res.json(db.getPowerReadingsRange(from, to));
+});
+
 // Health check
 app.get("/api/status", (req, res) => {
   const now = Date.now();
@@ -157,7 +197,7 @@ app.listen(PORT, () => console.log(`🚀 Serveur prêt sur http://localhost:${PO
 function shutdown() {
   console.log("🛑 Arrêt propre...");
   saveCacheToDiskSync();
-  try { atomicWriteSync(HISTORY_FILE, JSON.stringify(history)); } catch { }
+  db.closeDb();
   process.exit(0);
 }
 

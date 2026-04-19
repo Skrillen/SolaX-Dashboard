@@ -84,14 +84,9 @@ function addDaysToKey(dayKey, delta) {
   dt.setDate(dt.getDate() + delta);
   return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,"0")}-${String(dt.getDate()).padStart(2,"0")}`;
 }
-function getChartOldestDayKey() { return addDaysToKey(getLocalDayKey(), -(CHART_RETENTION_DAYS - 1)); }
 function dayBoundsMs(dayKey) {
   const [y, m, d] = dayKey.split("-").map(Number);
   return { start: new Date(y, m-1, d, 0,0,0,0).getTime(), end: new Date(y, m-1, d, 23,59,59,999).getTime() };
-}
-function formatDayLabelFr(dayKey) {
-  const [y, m, d] = dayKey.split("-").map(Number);
-  return new Date(y, m-1, d).toLocaleDateString("fr-FR", { weekday:"long", day:"numeric", month:"long", year:"numeric" });
 }
 function getDayPointsFromServer(dayKey) {
   const raw = serverHistory.days[dayKey];
@@ -99,16 +94,54 @@ function getDayPointsFromServer(dayKey) {
   return raw.map(pt => ({ x: pt[0], y: round2(Math.max(0, pt[1])), house: pt[2] != null ? round2(Math.max(0, pt[2])) : null }));
 }
 
+/* ——— Chargement dynamique SQLite ——— */
+async function ensureDayDataLoaded(dayKey) {
+  if (serverHistory.days[dayKey]) return; // Déjà en RAM (SSE ou chargé précédemment)
+  
+  try {
+    const dateInput = document.getElementById("chartDatePicker");
+    if (dateInput) dateInput.style.opacity = "0.5"; // Indicateur visuel de chargement
+
+    const res = await fetch(`/api/db/readings?day=${dayKey}`);
+    if (res.ok) {
+      const rows = await res.json();
+      serverHistory.days[dayKey] = rows.map(r => [r.ts, r.pv_power, r.house_power, r.grid_power]);
+    } else {
+      serverHistory.days[dayKey] = [];
+    }
+
+    if (!serverHistory.summaries) serverHistory.summaries = {};
+    if (!serverHistory.summaries[dayKey]) {
+      const sumRes = await fetch(`/api/db/summaries?limit=365`);
+      if (sumRes.ok) {
+        const sums = await sumRes.json();
+        for (const s of sums) {
+          serverHistory.summaries[s.day_key] = {
+            yield: s.yield_kwh, import: s.import_kwh, export: s.export_kwh, updatedAt: s.updated_at
+          };
+        }
+      }
+    }
+
+    if (dateInput) dateInput.style.opacity = "1";
+  } catch (err) {
+    console.error("Erreur chargement SQLite historique :", err);
+  }
+}
+
 /* ——— Navigation graphique ——— */
 function updateChartNavUI() {
-  const labelEl = document.getElementById("chartDayLabel");
+  const dateInput = document.getElementById("chartDatePicker");
   const prevBtn = document.getElementById("chartPrevDay");
   const nextBtn = document.getElementById("chartNextDay");
-  if (!labelEl || !prevBtn || !nextBtn) return;
-  labelEl.textContent = formatDayLabelFr(chartViewDayKey);
-  const today = getLocalDayKey(), oldest = getChartOldestDayKey();
+  if (!dateInput || !prevBtn || !nextBtn) return;
+  
+  const today = getLocalDayKey();
+  dateInput.value = chartViewDayKey;
+  dateInput.max = today;
+  
   nextBtn.disabled = chartViewDayKey >= today;
-  prevBtn.disabled = chartViewDayKey <= oldest;
+  prevBtn.disabled = false; // Plus de limite de rétention
 }
 
 function applyChartView() {
@@ -160,8 +193,8 @@ function updateChartStats() {
   // Priorité au résumé définitif (pour les jours passés)
   if (!isToday && summary) {
     totalYield     = summary.yield;
-    totalHouse     = (summary.yield - summary.export) + summary.import;
-    totalSolarUsed = summary.yield - summary.export;
+    totalSolarUsed = Math.max(0, summary.yield - summary.export);
+    totalHouse     = totalSolarUsed + summary.import;
     // On doit quand même trouver le Pic dans les points
     const pts = getDayPointsFromServer(chartViewDayKey);
     if (pts.length > 0) peakPower = Math.max(...pts.map(p => p.y));
@@ -242,13 +275,32 @@ function initPowerChart() {
 
   const prevBtn = document.getElementById("chartPrevDay");
   const nextBtn = document.getElementById("chartNextDay");
-  prevBtn?.addEventListener("click", () => {
-    const prev = addDaysToKey(chartViewDayKey, -1);
-    if (prev >= getChartOldestDayKey()) { chartViewDayKey = prev; applyChartView(); }
+  const dateInput = document.getElementById("chartDatePicker");
+
+  dateInput?.addEventListener("change", async (e) => {
+    const val = e.target.value;
+    if (val && val <= getLocalDayKey()) {
+      chartViewDayKey = val;
+      await ensureDayDataLoaded(chartViewDayKey);
+      applyChartView();
+    } else {
+      e.target.value = chartViewDayKey;
+    }
   });
-  nextBtn?.addEventListener("click", () => {
+
+  prevBtn?.addEventListener("click", async () => {
+    chartViewDayKey = addDaysToKey(chartViewDayKey, -1);
+    await ensureDayDataLoaded(chartViewDayKey);
+    applyChartView();
+  });
+  
+  nextBtn?.addEventListener("click", async () => {
     const next = addDaysToKey(chartViewDayKey, 1);
-    if (next <= getLocalDayKey()) { chartViewDayKey = next; applyChartView(); }
+    if (next <= getLocalDayKey()) { 
+      chartViewDayKey = next; 
+      await ensureDayDataLoaded(chartViewDayKey);
+      applyChartView(); 
+    }
   });
 }
 
