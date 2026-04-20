@@ -400,15 +400,15 @@ function renderDOM() {
         <td data-label="Prod. instant" class="num"><span id="val-acpower-${r._sn}"></span></td>
         <td data-label="Prod. jour" class="num"><span id="val-yieldtoday-${r._sn}"></span></td>
         <td data-label="Total" class="num"><span id="val-yieldtotal-${r._sn}"></span></td>
-        <td data-label="Panneau 1" class="num"><span id="val-powerdc1-${r._sn}"></span></td>
-        <td data-label="Panneau 2" class="num"><span id="val-powerdc2-${r._sn}"></span></td>
+        <td data-label="Panneau 1 (DC)" class="num"><span id="val-powerdc1-${r._sn}"></span></td>
+        <td data-label="Panneau 2 (DC)" class="num"><span id="val-powerdc2-${r._sn}"></span></td>
       </tr>`).join("");
 
     document.getElementById("table").innerHTML = `<div class="table-wrap"><table>
       <thead><tr>
         <th scope="col">#</th><th scope="col">SN</th><th scope="col">Status</th>
         <th scope="col">Prod. instant</th><th scope="col">Prod. jour</th>
-        <th scope="col">Total</th><th scope="col">Panneau 1</th><th scope="col">Panneau 2</th>
+        <th scope="col">Total</th><th scope="col">Panneau 1 (DC)</th><th scope="col">Panneau 2 (DC)</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table></div>`;
