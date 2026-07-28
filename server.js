@@ -17,7 +17,7 @@ const {
   pushDataToClients,
 } = require("./lib/sse");
 
-const { getStatsForRange } = db;
+const { getStatsForRange, simulateBattery } = db;
 
 /* --------------------------------------------------------------------------
    Capture des Logs en mémoire
@@ -157,6 +157,31 @@ app.get("/api/db/stats", (req, res) => {
     res.json(result);
   } catch (err) {
     console.error("[api/db/stats] Erreur :", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /api/db/battery-sim?from=YYYY-MM-DD&to=YYYY-MM-DD&voltage=48&dod=0.9&efficiency=0.9
+ * Exécute la simulation batterie côté serveur et retourne les résultats sans transférer les points bruts.
+ */
+app.get("/api/db/battery-sim", (req, res) => {
+  const { from, to, voltage, dod, efficiency } = req.query;
+  const dateRe = /^\d{4}-\d{2}-\d{2}$/;
+  if (!from || !to || !dateRe.test(from) || !dateRe.test(to) || from > to) {
+    return res.status(400).json({ error: "Paramètres 'from' et 'to' requis au format YYYY-MM-DD, from <= to" });
+  }
+
+  const v  = parseFloat(voltage)    || 48;
+  const d  = parseFloat(dod)        || 0.9;
+  const eff = parseFloat(efficiency) || 0.9;
+
+  res.set("Cache-Control", "no-store");
+  try {
+    const result = simulateBattery(from, to, v, d, eff);
+    res.json(result);
+  } catch (err) {
+    console.error("[api/db/battery-sim] Erreur :", err.message);
     res.status(500).json({ error: err.message });
   }
 });

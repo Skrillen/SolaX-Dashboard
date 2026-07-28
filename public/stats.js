@@ -5,10 +5,12 @@
    ================================================================ */
 const today = getLocalDayKey();
 
-let statsData     = null;   // { days, totals, readings }
+let statsData     = null;   // { days, totals }
 let statsChart    = null;
 let batteryChart  = null;
 let activePreset  = "30";
+let currentFromDate = "";
+let currentToDate   = "";
 
 /* ================================================================
    UTILITAIRES DATE
@@ -52,6 +54,8 @@ function showToast(msg, type = "") {
    CHARGEMENT DES DONNÉES
    ================================================================ */
 async function loadStats(fromDate, toDate) {
+  currentFromDate = fromDate;
+  currentToDate   = toDate;
   showState("loading");
   try {
     const res = await fetch(`/api/db/stats?from=${fromDate}&to=${toDate}`);
@@ -281,9 +285,12 @@ function renderStatsChart(days) {
 /* ================================================================
    SIMULATION BATTERIE
    ================================================================ */
-function runBatterySimulation() {
-  if (!statsData || !statsData.readings || statsData.readings.length === 0) {
-    showToast("⚠️ Pas de données brutes disponibles pour la simulation.", "error");
+async function runBatterySimulation() {
+  const from = document.getElementById("stats-from").value || currentFromDate;
+  const to   = document.getElementById("stats-to").value   || currentToDate;
+
+  if (!from || !to) {
+    showToast("⚠️ Période non définie.", "error");
     return;
   }
 
@@ -294,140 +301,20 @@ function runBatterySimulation() {
   document.getElementById("battery-result").style.display  = "none";
   document.getElementById("battery-loading").style.display = "flex";
 
-  // On lance la simulation dans un micro-délai pour laisser l'UI se mettre à jour
-  setTimeout(() => {
-    try {
-      const result = computeBatteryScenarios(statsData.readings, voltage, dod, efficiency);
-      renderBatteryResult(result, voltage, dod);
-    } catch (err) {
-      console.error("Erreur simulation batterie:", err);
-      showToast("❌ Erreur lors de la simulation.", "error");
-    } finally {
-      document.getElementById("battery-loading").style.display = "none";
+  try {
+    const res = await fetch(`/api/db/battery-sim?from=${from}&to=${to}&voltage=${voltage}&dod=${dod}&efficiency=${efficiency}`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      throw new Error(err.error || res.statusText);
     }
-  }, 50);
-}
-
-/**
- * Simule plusieurs capacités de batterie sur les données brutes.
- * @param {Array}  readings   power_readings (ts, pv_power, house_power, grid_power)
- * @param {number} voltage    Tension batterie (V)
- * @param {number} dod        Profondeur de décharge (0–1)
- * @param {number} efficiency Rendement aller-retour (0–1)
- * @returns {object}
- */
-function computeBatteryScenarios(readings, voltage, dod, efficiency) {
-  // Trier par timestamp
-  const pts = [...readings].sort((a, b) => a.ts - b.ts);
-
-  // --- Baseline (sans batterie) ---
-  let baseYield = 0, baseHouse = 0, baseSolarUsed = 0;
-  for (let i = 1; i < pts.length; i++) {
-    const dt = (pts[i].ts - pts[i - 1].ts) / 3_600_000;
-    if (dt <= 0 || dt > 0.5) continue;
-    const avgPv    = (pts[i].pv_power    + pts[i - 1].pv_power)    / 2;
-    const avgHouse = (pts[i].house_power + pts[i - 1].house_power) / 2;
-    const pv    = Math.max(0, avgPv);
-    const house = Math.max(0, avgHouse);
-    baseYield     += pv    * dt / 1000;
-    baseHouse     += house * dt / 1000;
-    baseSolarUsed += Math.min(pv, house) * dt / 1000;
+    const result = await res.json();
+    renderBatteryResult(result, voltage, dod);
+  } catch (err) {
+    console.error("Erreur simulation batterie:", err);
+    showToast("❌ Erreur lors de la simulation.", "error");
+  } finally {
+    document.getElementById("battery-loading").style.display = "none";
   }
-
-  const baseAC  = baseYield > 0 ? baseSolarUsed / baseYield  : 0;
-  const baseInd = baseHouse > 0 ? baseSolarUsed / baseHouse  : 0;
-
-  if (baseHouse < 0.1) {
-    // Pas de données de consommation
-    return { error: "Données de consommation maison insuffisantes pour la simulation." };
-  }
-
-  // --- Simulation sur une plage de capacités ---
-  // De 0.5 à 20 kWh par pas de 0.5 kWh
-  const capacitiesKwh = [];
-  for (let c = 0.5; c <= 20.01; c += 0.5) capacitiesKwh.push(Math.round(c * 10) / 10);
-
-  const results = capacitiesKwh.map(capKwh => simulateCapacity(pts, capKwh, dod, efficiency, baseHouse, baseYield, baseInd));
-
-  // Trouver la capacité optimale (coude : gain marginal < 1.5 % par kWh supplémentaire)
-  let optimalIdx = results.length - 1;
-  for (let i = 1; i < results.length; i++) {
-    const marginalGain = (results[i].indPct - results[i - 1].indPct); // en %
-    // Gain par kWh ajouté
-    if (marginalGain < 1.5) {
-      optimalIdx = i - 1;
-      break;
-    }
-  }
-
-  // Scénarios fixes pour le tableau
-  const fixedCapacities = [0, 2, 5, 10, 15, 20];
-  const scenarios = fixedCapacities.map(cap => {
-    if (cap === 0) return { capKwh: 0, capAh: 0, indPct: round1(baseInd * 100), gainPct: 0, acPct: round1(baseAC * 100), isBaseline: true };
-    const r = simulateCapacity(pts, cap, dod, efficiency, baseHouse, baseYield, baseInd);
-    return { ...r, capKwh: cap, capAh: Math.round((cap * 1000) / (voltage * dod)), isBaseline: false };
-  });
-
-  // Ajouter l'optimal si pas déjà dans la liste
-  const optCap = capacitiesKwh[optimalIdx];
-  const optResult = results[optimalIdx];
-
-  return {
-    baseline: { indPct: round1(baseInd * 100), acPct: round1(baseAC * 100) },
-    capacitiesKwh,
-    results,
-    optimal: {
-      capKwh: optCap,
-      capAh: Math.round((optCap * 1000) / (voltage * dod)),
-      indPct: optResult.indPct,
-      gainPct: optResult.gainPct,
-      acPct: optResult.acPct,
-    },
-    scenarios,
-  };
-}
-
-function simulateCapacity(pts, capKwh, dod, efficiency, baseHouse, baseYield, baseInd) {
-  const usableKwh = capKwh * dod;
-  let soc = 0;           // kWh actuellement stockés
-  let extraSolar = 0;    // kWh supplémentaires fournis par la batterie
-
-  for (let i = 1; i < pts.length; i++) {
-    const dt = (pts[i].ts - pts[i - 1].ts) / 3_600_000;
-    if (dt <= 0 || dt > 0.5) continue;
-    const avgPv    = (pts[i].pv_power    + pts[i - 1].pv_power)    / 2;
-    const avgHouse = (pts[i].house_power + pts[i - 1].house_power) / 2;
-    const pv    = Math.max(0, avgPv);
-    const house = Math.max(0, avgHouse);
-    const surplus = (pv - house) * dt / 1000; // kWh
-
-    if (surplus > 0) {
-      // Charger la batterie (avec perte de rendement)
-      const canCharge = Math.min(surplus * Math.sqrt(efficiency), usableKwh - soc);
-      soc += Math.max(0, canCharge);
-    } else {
-      // Décharger la batterie pour couvrir le déficit
-      const needed  = -surplus;
-      const canDischarge = Math.min(needed, soc * Math.sqrt(efficiency));
-      soc -= canDischarge / Math.sqrt(efficiency);
-      soc = Math.max(0, soc);
-      extraSolar += canDischarge;
-    }
-  }
-
-  const newSolarUsed = (baseHouse > 0 ? baseInd * baseHouse : 0) + extraSolar;
-  const newInd = baseHouse > 0 ? Math.min(1, newSolarUsed / baseHouse) : 0;
-  const newAC  = baseYield > 0 ? Math.min(1, (baseYield > 0 ? baseInd * baseHouse / baseYield : 0) + extraSolar / baseYield) : 0;
-
-  // Recalcul auto-conso propre
-  const baseSolarUsed = baseHouse > 0 ? baseInd * baseHouse : 0;
-  const newAC2 = baseYield > 0 ? Math.min(1, (baseSolarUsed + extraSolar) / baseYield) : 0;
-
-  return {
-    indPct:  round1(newInd  * 100),
-    gainPct: round1((newInd - baseInd) * 100),
-    acPct:   round1(newAC2  * 100),
-  };
 }
 
 /* ================================================================
