@@ -17,6 +17,8 @@ const {
   pushDataToClients,
 } = require("./lib/sse");
 
+const { getStatsForRange } = db;
+
 /* --------------------------------------------------------------------------
    Capture des Logs en mémoire
    -------------------------------------------------------------------------- */
@@ -41,6 +43,11 @@ console.error = (...args) => { originalError(...args); addToBuffer("ERROR", args
 const app = express();
 app.use(compression());
 app.use(express.static("public", { maxAge: isProd ? 86_400_000 : 0 }));
+
+/* Route HTML — /stats sert stats.html */
+app.get("/stats", (req, res) => {
+  res.sendFile(require("path").join(__dirname, "public", "stats.html"));
+});
 
 /* --------------------------------------------------------------------------
    Endpoints API
@@ -132,6 +139,26 @@ app.get("/api/db/range", (req, res) => {
   }
   res.set("Cache-Control", "no-store");
   res.json(db.getPowerReadingsRange(from, to));
+});
+
+/**
+ * GET /api/db/stats?from=YYYY-MM-DD&to=YYYY-MM-DD
+ * Retourne les statistiques agrégées (auto-conso, indépendance) sur une plage de dates.
+ */
+app.get("/api/db/stats", (req, res) => {
+  const { from, to } = req.query;
+  const dateRe = /^\d{4}-\d{2}-\d{2}$/;
+  if (!from || !to || !dateRe.test(from) || !dateRe.test(to) || from > to) {
+    return res.status(400).json({ error: "Paramètres 'from' et 'to' requis au format YYYY-MM-DD, from <= to" });
+  }
+  res.set("Cache-Control", "no-store");
+  try {
+    const result = getStatsForRange(from, to);
+    res.json(result);
+  } catch (err) {
+    console.error("[api/db/stats] Erreur :", err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Health check

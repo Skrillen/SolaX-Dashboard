@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Statistiques — Parc Solaire des kerch</title>
+<meta name="description" content="Statistiques avancées : auto-consommation, indépendance énergétique et simulateur de batterie pour le parc solaire des Kerch.">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#000000">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+</head>
+<body>
+  <div id="offline-banner" class="offline-banner">🔴 Vous êtes actuellement hors-ligne.</div>
+
+  <main class="layout-scope">
+
+    <!-- ── En-tête ── -->
+    <header class="page-header">
+      <a href="/" class="page-nav-link" aria-label="Retour au dashboard">
+        ‹ Dashboard
+      </a>
+      <h2>📊 Statistiques</h2>
+      <span class="page-header__spacer" aria-hidden="true"></span>
+    </header>
+
+    <!-- ── Sélecteur de période ── -->
+    <section class="stats-period-bar" aria-label="Sélection de la période">
+      <div class="period-presets">
+        <button class="period-btn" data-preset="7" id="preset-7">7 jours</button>
+        <button class="period-btn" data-preset="30" id="preset-30">30 jours</button>
+        <button class="period-btn" data-preset="90" id="preset-90">90 jours</button>
+        <button class="period-btn" data-preset="365" id="preset-365">1 an</button>
+        <button class="period-btn" data-preset="all" id="preset-all">Tout</button>
+      </div>
+      <div class="period-custom">
+        <label class="period-label" for="stats-from">Du</label>
+        <input type="date" id="stats-from" class="stats-date-input" aria-label="Date de début">
+        <label class="period-label" for="stats-to">Au</label>
+        <input type="date" id="stats-to" class="stats-date-input" aria-label="Date de fin">
+        <button class="period-apply-btn" id="stats-apply" aria-label="Appliquer la période">
+          Calculer
+        </button>
+      </div>
+    </section>
+
+    <!-- ── État de chargement ── -->
+    <div id="stats-loading" class="stats-loading-state" aria-live="polite">
+      <div class="stats-spinner"></div>
+      <p>Chargement des données…</p>
+    </div>
+
+    <!-- ── Contenu principal (masqué pendant le chargement) ── -->
+    <div id="stats-content" class="stats-content" style="display:none">
+
+      <!-- Info période -->
+      <p class="stats-period-info" id="stats-period-info"></p>
+
+      <!-- ── KPIs Globaux ── -->
+      <section class="stats-section" aria-label="Indicateurs globaux">
+        <h3 class="stats-section-title">⚡ Production & Consommation</h3>
+        <div class="stats-kpi-grid" id="kpi-energy"></div>
+      </section>
+
+      <!-- ── KPIs Auto-conso / Indépendance ── -->
+      <section class="stats-section" aria-label="Auto-consommation et indépendance">
+        <h3 class="stats-section-title">🔄 Auto-consommation & Indépendance</h3>
+        <div class="stats-kpi-grid" id="kpi-ratios"></div>
+      </section>
+
+      <!-- ── Graphique journalier ── -->
+      <section class="stats-section" aria-label="Évolution journalière">
+        <h3 class="stats-section-title">📈 Évolution journalière</h3>
+        <div class="stats-chart-legend">
+          <span class="legend-dot" style="background:#ff5a5a"></span><span>Production (kWh)</span>
+          <span class="legend-dot" style="background:#3b82f6"></span><span>Conso. Maison (kWh)</span>
+          <span class="legend-dot" style="background:#22c55e"></span><span>Auto-conso (%)</span>
+          <span class="legend-dot" style="background:#a855f7"></span><span>Indépendance (%)</span>
+        </div>
+        <div class="stats-chart-wrap">
+          <canvas id="statsChart"></canvas>
+        </div>
+      </section>
+
+      <!-- ── Simulateur de Batterie ── -->
+      <section class="stats-section stats-battery-section" aria-label="Simulateur de batterie">
+        <h3 class="stats-section-title">🔋 Simulateur de Batterie</h3>
+        <p class="stats-section-desc">
+          Estimation du gain d'indépendance selon la capacité de stockage, basée sur tes données réelles sur la période sélectionnée.
+        </p>
+
+        <div class="battery-controls">
+          <div class="battery-control-group">
+            <label class="battery-label" for="bat-voltage">Tension système</label>
+            <select id="bat-voltage" class="battery-select">
+              <option value="12">12 V</option>
+              <option value="24">24 V</option>
+              <option value="48" selected>48 V</option>
+            </select>
+          </div>
+          <div class="battery-control-group">
+            <label class="battery-label" for="bat-dod">Profondeur de décharge (DoD)</label>
+            <select id="bat-dod" class="battery-select">
+              <option value="0.8">80 %</option>
+              <option value="0.9" selected>90 %</option>
+              <option value="1.0">100 %</option>
+            </select>
+          </div>
+          <div class="battery-control-group">
+            <label class="battery-label" for="bat-efficiency">Rendement aller-retour</label>
+            <select id="bat-efficiency" class="battery-select">
+              <option value="0.85">85 %</option>
+              <option value="0.90" selected>90 %</option>
+              <option value="0.95">95 %</option>
+            </select>
+          </div>
+          <button class="battery-run-btn" id="bat-simulate">
+            ▶ Lancer la simulation
+          </button>
+        </div>
+
+        <!-- Résultat simulation -->
+        <div id="battery-result" class="battery-result" style="display:none">
+          <div class="battery-optimal-card" id="bat-optimal-card">
+            <div class="bat-optimal-icon">🏆</div>
+            <div class="bat-optimal-body">
+              <p class="bat-optimal-label">Capacité optimale estimée</p>
+              <p class="bat-optimal-value" id="bat-optimal-value">—</p>
+              <p class="bat-optimal-sub" id="bat-optimal-sub">—</p>
+            </div>
+          </div>
+
+          <!-- Courbe de gain -->
+          <div class="battery-curve-wrap">
+            <canvas id="batteryChart"></canvas>
+          </div>
+
+          <!-- Tableau des scénarios -->
+          <div class="battery-scenarios">
+            <h4 class="battery-scenarios-title">Comparaison des scénarios</h4>
+            <div class="battery-table-wrap">
+              <table class="battery-table" id="bat-scenarios-table">
+                <thead>
+                  <tr>
+                    <th>Capacité</th>
+                    <th>Ah</th>
+                    <th>Indépendance</th>
+                    <th>Gain vs. sans batterie</th>
+                    <th>Auto-conso</th>
+                  </tr>
+                </thead>
+                <tbody id="bat-scenarios-body"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div id="battery-loading" class="battery-loading" style="display:none">
+          <div class="stats-spinner"></div>
+          <p>Simulation en cours…</p>
+        </div>
+      </section>
+
+    </div><!-- /stats-content -->
+
+    <!-- ── Erreur ── -->
+    <div id="stats-error" class="stats-error-state" style="display:none" aria-live="assertive">
+      <p class="stats-error-icon">⚠️</p>
+      <p id="stats-error-msg">Impossible de charger les données.</p>
+      <button class="period-apply-btn" id="stats-retry">Réessayer</button>
+    </div>
+
+  </main>
+
+  <div id="toast" class="toast" aria-hidden="true"></div>
+
+  <script src="stats.js"></script>
+</body>
+</html>
