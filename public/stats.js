@@ -89,7 +89,8 @@ function renderStats(fromDate, toDate) {
   // Info période
   const infoEl = document.getElementById("stats-period-info");
   if (infoEl) {
-    infoEl.textContent = `Période : ${formatDate(fromDate)} → ${formatDate(toDate)} · ${totals.dayCount} jour${totals.dayCount > 1 ? "s" : ""} de données`;
+    const ptsStr = totals.readingCount ? `${totals.readingCount.toLocaleString("fr-FR")} points sur ` : "";
+    infoEl.textContent = `Période : ${formatDate(fromDate)} → ${formatDate(toDate)} · ${ptsStr}${totals.dayCount} jour${totals.dayCount > 1 ? "s" : ""} analysé${totals.dayCount > 1 ? "s" : ""}`;
   }
 
   // KPIs énergie
@@ -134,13 +135,13 @@ function kpiCard(icon, label, value, unit, color) {
 
 function kpiMinAvgMax(icon, label, obj, unit, color) {
   if (!obj || obj.avg == null) {
-    return `<div class="stats-kpi-card stats-kpi-card--wide">
+    return `<div class="stats-kpi-card">
       <div class="kpi-icon">${icon}</div>
       <div class="kpi-label">${label}</div>
       <div class="kpi-value"><span class="kpi-na">Données insuffisantes</span></div>
     </div>`;
   }
-  return `<div class="stats-kpi-card stats-kpi-card--wide">
+  return `<div class="stats-kpi-card">
     <div class="kpi-icon">${icon}</div>
     <div class="kpi-label">${label}</div>
     <div class="kpi-mma">
@@ -294,15 +295,19 @@ async function runBatterySimulation() {
     return;
   }
 
-  const voltage    = parseFloat(document.getElementById("bat-voltage").value);
-  const dod        = parseFloat(document.getElementById("bat-dod").value);
-  const efficiency = parseFloat(document.getElementById("bat-efficiency").value);
+  const voltage      = parseFloat(document.getElementById("bat-voltage").value);
+  const dod          = parseFloat(document.getElementById("bat-dod").value);
+  const efficiency   = parseFloat(document.getElementById("bat-efficiency").value);
+  const priceImport  = parseFloat(document.getElementById("bat-price-import")?.value) || 0.20;
+  const priceSurplus = parseFloat(document.getElementById("bat-price-surplus")?.value) || 0.04;
+
+  saveBatteryParams(voltage, dod, efficiency, priceImport, priceSurplus);
 
   document.getElementById("battery-result").style.display  = "none";
   document.getElementById("battery-loading").style.display = "flex";
 
   try {
-    const res = await fetch(`/api/db/battery-sim?from=${from}&to=${to}&voltage=${voltage}&dod=${dod}&efficiency=${efficiency}`);
+    const res = await fetch(`/api/db/battery-sim?from=${from}&to=${to}&voltage=${voltage}&dod=${dod}&efficiency=${efficiency}&priceImport=${priceImport}&priceSurplus=${priceSurplus}`);
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: res.statusText }));
       throw new Error(err.error || res.statusText);
@@ -326,33 +331,64 @@ function renderBatteryResult(result, voltage, dod) {
     return;
   }
 
-  const { baseline, optimal, capacitiesKwh, results, scenarios } = result;
+  const { baseline, recommended, usefulLimit, capacitiesKwh, results, scenarios } = result;
 
-  // Carte optimale
-  document.getElementById("bat-optimal-value").textContent =
-    `${optimal.capAh} Ah  (${optimal.capKwh} kWh)`;
-  document.getElementById("bat-optimal-sub").textContent =
-    `Indépendance estimée : ${optimal.indPct}%  (+${optimal.gainPct}% vs. sans batterie)`;
+  // 1) Carte Batterie Recommandée
+  document.getElementById("bat-rec-value").textContent =
+    `${recommended.capKwh} kWh (${recommended.capAh} Ah)`;
+
+  document.getElementById("bat-rec-list").innerHTML = [
+    `<li>• <strong>${recommended.surplusCapturedPct}%</strong> du surplus utile capturé</li>`,
+    `<li>• <strong>${recommended.indPct}%</strong> d'indépendance globale</li>`,
+    `<li>• Seulement <strong>${recommended.exportRemKwh} kWh</strong> d'export restant sur la période</li>`,
+    `<li>• Batterie remplie à <strong>${recommended.capacityUtilizationPct}%</strong> en moyenne par jour (~${recommended.estimatedSavingsEur} € économisés)</li>`,
+  ].join("");
+
+  // 2) Carte Limite Utile
+  document.getElementById("bat-limit-value").textContent =
+    `Au-delà de ${usefulLimit.capKwh} kWh (${usefulLimit.capAh} Ah)`;
+
+  document.getElementById("bat-limit-desc").textContent =
+    `Au-delà de cette capacité, le remplissage moyen quotidien chute et les kWh supplémentaires apportent un gain négligeable.`;
 
   // Courbe gain
   renderBatteryChart(baseline, capacitiesKwh, results);
 
   // Tableau scénarios
   const tbody = document.getElementById("bat-scenarios-body");
-  const optCapKwh = optimal.capKwh;
+  const recCapKwh   = recommended.capKwh;
+  const limitCapKwh = usefulLimit.capKwh;
+
   tbody.innerHTML = scenarios.map(s => {
-    const isOpt = !s.isBaseline && s.capKwh === optCapKwh;
-    const cls   = s.isBaseline ? "" : (isOpt ? "bat-row-optimal" : "");
-    const label = s.isBaseline ? "Sans batterie" : `${s.capKwh} kWh`;
-    const ahStr = s.isBaseline ? "—" : `${s.capAh} Ah`;
-    const gainStr = s.isBaseline ? "—" : `+${s.gainPct} %`;
-    const optBadge = isOpt ? ` <span class="bat-opt-badge">✦ Optimal</span>` : "";
+    const isRec   = !s.isBaseline && (s.isRecommended || s.capKwh === recCapKwh);
+    const isLimit = !s.isBaseline && (s.isUsefulLimit  || s.capKwh === limitCapKwh) && s.capKwh !== recCapKwh;
+    
+    let cls = "";
+    if (isRec) cls = "bat-row-optimal";
+    else if (isLimit) cls = "bat-row-maxind";
+
+    const label      = s.isBaseline ? "Sans batterie" : `${s.capKwh} kWh`;
+    const ahStr      = s.isBaseline ? "—" : `${s.capAh} Ah`;
+    const cycledStr  = s.isBaseline ? "—" : `${s.cycledKwh} kWh`;
+    const surplusStr = s.isBaseline ? "—" : `${s.surplusCapturedPct} %`;
+    const utilStr    = s.isBaseline ? "—" : `${s.capacityUtilizationPct} %`;
+    const savingsStr = s.isBaseline ? "—" : `+${s.estimatedSavingsEur} €`;
+    const expStr     = `${s.exportRemKwh} kWh`;
+
+    let badges = "";
+    if (isRec) badges += ` <span class="bat-opt-badge bat-badge-rec" title="Batterie recommandée">🔋 Recommandée</span>`;
+    if (isLimit) badges += ` <span class="bat-opt-badge bat-badge-warn" title="Limite utile">⚠️ Limite</span>`;
+
     return `<tr class="${cls}">
-      <td>${label}${optBadge}</td>
+      <td>${label}${badges}</td>
       <td>${ahStr}</td>
+      <td><strong>${s.acPct} %</strong></td>
       <td>${s.indPct} %</td>
-      <td>${gainStr}</td>
-      <td>${s.acPct} %</td>
+      <td><strong>${savingsStr}</strong></td>
+      <td>${expStr}</td>
+      <td>${cycledStr}</td>
+      <td><strong>${surplusStr}</strong></td>
+      <td>${utilStr}</td>
     </tr>`;
   }).join("");
 
@@ -373,10 +409,10 @@ function renderBatteryChart(baseline, capacitiesKwh, results) {
       labels: ["0 kWh (sans)", ...capacitiesKwh.map(c => c + " kWh")],
       datasets: [
         {
-          label: "Indépendance (%)",
-          data: [baseline.indPct, ...results.map(r => r.indPct)],
-          borderColor: "#a855f7",
-          backgroundColor: "rgba(168,85,247,0.08)",
+          label: "Auto-consommation (%)",
+          data: [baseline.acPct, ...results.map(r => r.acPct)],
+          borderColor: "#22c55e",
+          backgroundColor: "rgba(34,197,94,0.08)",
           borderWidth: 2.5,
           fill: true,
           tension: 0.4,
@@ -385,12 +421,12 @@ function renderBatteryChart(baseline, capacitiesKwh, results) {
           yAxisID: "yPct",
         },
         {
-          label: "Gain vs. sans batterie (%)",
-          data: [0, ...results.map(r => r.gainPct)],
-          borderColor: "#22c55e",
+          label: "Indépendance (%)",
+          data: [baseline.indPct, ...results.map(r => r.indPct)],
+          borderColor: "#a855f7",
           backgroundColor: "transparent",
           borderWidth: 2,
-          borderDash: [5, 4],
+          borderDash: [4, 4],
           tension: 0.4,
           pointRadius: 0,
           pointHoverRadius: 5,
@@ -485,9 +521,38 @@ function applyCustomRange() {
 }
 
 /* ================================================================
+   PERSISTANCE DES PARAMÈTRES BATTERIE (localStorage)
+   ================================================================ */
+function loadBatteryParams() {
+  try {
+    const saved = localStorage.getItem("solax_battery_params");
+    if (!saved) return;
+    const p = JSON.parse(saved);
+    if (p.voltage && document.getElementById("bat-voltage"))      document.getElementById("bat-voltage").value    = p.voltage;
+    if (p.dod && document.getElementById("bat-dod"))              document.getElementById("bat-dod").value        = p.dod;
+    if (p.efficiency && document.getElementById("bat-efficiency"))   document.getElementById("bat-efficiency").value = p.efficiency;
+    if (p.priceImport && document.getElementById("bat-price-import")) document.getElementById("bat-price-import").value = p.priceImport;
+    if (p.priceSurplus && document.getElementById("bat-price-surplus")) document.getElementById("bat-price-surplus").value = p.priceSurplus;
+  } catch (e) {
+    console.warn("Impossible de charger les paramètres batterie depuis localStorage", e);
+  }
+}
+
+function saveBatteryParams(voltage, dod, efficiency, priceImport, priceSurplus) {
+  try {
+    localStorage.setItem("solax_battery_params", JSON.stringify({ voltage, dod, efficiency, priceImport, priceSurplus }));
+  } catch (e) {
+    console.warn("Impossible de sauvegarder les paramètres batterie dans localStorage", e);
+  }
+}
+
+/* ================================================================
    INIT
    ================================================================ */
 document.addEventListener("DOMContentLoaded", () => {
+  // Restaurer les paramètres batterie sauvegardés
+  loadBatteryParams();
+
   // Initialiser les inputs date
   const fromInput = document.getElementById("stats-from");
   const toInput   = document.getElementById("stats-to");

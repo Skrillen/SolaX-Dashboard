@@ -63,13 +63,13 @@
       <!-- ── KPIs Globaux ── -->
       <section class="stats-section" aria-label="Indicateurs globaux">
         <h3 class="stats-section-title">⚡ Production & Consommation</h3>
-        <div class="stats-kpi-grid" id="kpi-energy"></div>
+        <div class="stats-kpi-grid stats-kpi-grid--energy" id="kpi-energy"></div>
       </section>
 
       <!-- ── KPIs Auto-conso / Indépendance ── -->
       <section class="stats-section" aria-label="Auto-consommation et indépendance">
         <h3 class="stats-section-title">🔄 Auto-consommation & Indépendance</h3>
-        <div class="stats-kpi-grid" id="kpi-ratios"></div>
+        <div class="stats-kpi-grid stats-kpi-grid--ratios" id="kpi-ratios"></div>
       </section>
 
       <!-- ── Graphique journalier ── -->
@@ -90,7 +90,7 @@
       <section class="stats-section stats-battery-section" aria-label="Simulateur de batterie">
         <h3 class="stats-section-title">🔋 Simulateur de Batterie</h3>
         <p class="stats-section-desc">
-          Estimation du gain d'indépendance selon la capacité de stockage, basée sur tes données réelles sur la période sélectionnée.
+          Simulation physique de l'absorption du surplus solaire et du taux d'utilisation de la batterie sur tes données réelles.
         </p>
 
         <div class="battery-controls">
@@ -103,7 +103,7 @@
             </select>
           </div>
           <div class="battery-control-group">
-            <label class="battery-label" for="bat-dod">Profondeur de décharge (DoD)</label>
+            <label class="battery-label" for="bat-dod">Profondeur décharge (DoD)</label>
             <select id="bat-dod" class="battery-select">
               <option value="0.8">80 %</option>
               <option value="0.9" selected>90 %</option>
@@ -118,6 +118,14 @@
               <option value="0.95">95 %</option>
             </select>
           </div>
+          <div class="battery-control-group">
+            <label class="battery-label" for="bat-price-import">Prix kWh acheté</label>
+            <input type="number" id="bat-price-import" class="battery-select battery-input-num" value="0.20" step="0.01" min="0" placeholder="0.20 €">
+          </div>
+          <div class="battery-control-group">
+            <label class="battery-label" for="bat-price-surplus">Prix surplus revendu</label>
+            <input type="number" id="bat-price-surplus" class="battery-select battery-input-num" value="0.04" step="0.01" min="0" placeholder="0.04 €">
+          </div>
           <button class="battery-run-btn" id="bat-simulate">
             ▶ Lancer la simulation
           </button>
@@ -125,13 +133,38 @@
 
         <!-- Résultat simulation -->
         <div id="battery-result" class="battery-result" style="display:none">
-          <div class="battery-optimal-card" id="bat-optimal-card">
-            <div class="bat-optimal-icon">🏆</div>
-            <div class="bat-optimal-body">
-              <p class="bat-optimal-label">Capacité optimale estimée</p>
-              <p class="bat-optimal-value" id="bat-optimal-value">—</p>
-              <p class="bat-optimal-sub" id="bat-optimal-sub">—</p>
+          <div class="battery-cards-grid">
+
+            <!-- Carte Batterie Recommandée -->
+            <div class="battery-optimal-card bat-recommended-card" id="bat-recommended-card">
+              <div class="bat-optimal-icon">🔋</div>
+              <div class="bat-optimal-body">
+                <div class="bat-card-header-row">
+                  <p class="bat-optimal-label">Batterie recommandée</p>
+                  <span class="bat-badge-info bat-badge-rec" title="Plus petite batterie capturant l'essentiel du surplus utile">Capacité Utile</span>
+                </div>
+                <p class="bat-optimal-value" id="bat-rec-value">—</p>
+                <ul class="bat-rec-list" id="bat-rec-list">
+                  <!-- Puces générées dynamiquement dans stats.js -->
+                </ul>
+              </div>
             </div>
+
+            <!-- Carte Limite Utile -->
+            <div class="battery-optimal-card bat-limit-card" id="bat-limit-card">
+              <div class="bat-optimal-icon">⚠️</div>
+              <div class="bat-optimal-body">
+                <div class="bat-card-header-row">
+                  <p class="bat-optimal-label">Limite utile</p>
+                  <span class="bat-badge-info bat-badge-warn" title="Seuil au-delà duquel la capacité reste sous-exploitée">Seuil de saturation</span>
+                </div>
+                <p class="bat-optimal-value" id="bat-limit-value">—</p>
+                <p class="bat-optimal-sub" id="bat-limit-desc">
+                  Au-delà de cette capacité, les kWh supplémentaires ne sont pratiquement jamais utilisés sur la période.
+                </p>
+              </div>
+            </div>
+
           </div>
 
           <!-- Courbe de gain -->
@@ -146,11 +179,15 @@
               <table class="battery-table" id="bat-scenarios-table">
                 <thead>
                   <tr>
-                    <th>Capacité</th>
-                    <th>Ah</th>
-                    <th>Indépendance</th>
-                    <th>Gain vs. sans batterie</th>
-                    <th>Auto-conso</th>
+                    <th style="width: 14%;">Capacité</th>
+                    <th style="width: 7%;">Ah</th>
+                    <th style="width: 11%;">Auto-Conso</th>
+                    <th style="width: 11%;">Indépendance</th>
+                    <th style="width: 10%;" title="Économie brute estimée sur la période">Gain (€)</th>
+                    <th style="width: 13%;">Export Restant</th>
+                    <th style="width: 12%;">Énergie Cyclée</th>
+                    <th style="width: 11%;" title="Pourcentage du surplus solaire absorbé et stocké par la batterie">Surplus Capturé</th>
+                    <th style="width: 11%;" title="Moyenne des niveaux de charge maximaux atteints chaque jour">Remplissage</th>
                   </tr>
                 </thead>
                 <tbody id="bat-scenarios-body"></tbody>

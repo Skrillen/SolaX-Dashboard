@@ -166,19 +166,21 @@ app.get("/api/db/stats", (req, res) => {
  * Exécute la simulation batterie côté serveur et retourne les résultats sans transférer les points bruts.
  */
 app.get("/api/db/battery-sim", (req, res) => {
-  const { from, to, voltage, dod, efficiency } = req.query;
+  const { from, to, voltage, dod, efficiency, priceImport, priceSurplus } = req.query;
   const dateRe = /^\d{4}-\d{2}-\d{2}$/;
   if (!from || !to || !dateRe.test(from) || !dateRe.test(to) || from > to) {
     return res.status(400).json({ error: "Paramètres 'from' et 'to' requis au format YYYY-MM-DD, from <= to" });
   }
 
-  const v  = parseFloat(voltage)    || 48;
-  const d  = parseFloat(dod)        || 0.9;
-  const eff = parseFloat(efficiency) || 0.9;
+  const v    = parseFloat(voltage)      || 48;
+  const d    = parseFloat(dod)          || 0.9;
+  const eff  = parseFloat(efficiency)   || 0.9;
+  const pImp = parseFloat(priceImport)  || 0.20;
+  const pSur = parseFloat(priceSurplus) || 0.04;
 
   res.set("Cache-Control", "no-store");
   try {
-    const result = simulateBattery(from, to, v, d, eff);
+    const result = simulateBattery(from, to, v, d, eff, pImp, pSur);
     res.json(result);
   } catch (err) {
     console.error("[api/db/battery-sim] Erreur :", err.message);
