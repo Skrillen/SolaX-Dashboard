@@ -1,6 +1,8 @@
 .env
+.vscode/
 node_modules/
 data/forecast-cache.json
+data/solax_data.db
 data/solax-cache.json
 data/solax-history.json
 data/solax.db
